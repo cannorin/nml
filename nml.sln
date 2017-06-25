@@ -1,0 +1,17 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml", "src/nml.fsproj", "{2173CDB4-2FAA-42B8-9C66-A703C388536B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|AnyCPU = Debug|AnyCPU
+		Release|AnyCPU = Release|AnyCPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2173CDB4-2FAA-42B8-9C66-A703C388536B}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
+		{2173CDB4-2FAA-42B8-9C66-A703C388536B}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
+		{2173CDB4-2FAA-42B8-9C66-A703C388536B}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+		{2173CDB4-2FAA-42B8-9C66-A703C388536B}.Release|AnyCPU.Build.0 = Release|AnyCPU
+	EndGlobalSection
+EndGlobal
