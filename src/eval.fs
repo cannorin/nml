@@ -163,7 +163,7 @@ let evalWithContext term ctx =
     | UMatch (v, pts) ->
       let v' = v |> e ctx in
         if (fvOfTerm v' |> Set.isEmpty) then
-          match (pts |> List.choose (fun (p, b) -> matchPattern v' p |> Option.map (fun x -> (b, x))) |> List.tryHead) with
+          match (pts |> List.choose (fun (p, b) -> matchPattern p v' |> Option.map (fun x -> (b, x))) |> List.tryHead) with
             | Some (body, bindings) -> body |> e (bindings |> List.fold (fun m (x, r) -> m |> Map.add x (r |> e ctx)) ctx)
             | None -> failwith "match failed"
           else

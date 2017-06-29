@@ -37,39 +37,6 @@ let rec delayTypeBy i ty =
   else
     ty
 
-let rec isValidAsPattern ctx = function
-  | ULiteral _
-  | UVar _ -> true
-  | UConstruct (_, xs)
-  | UTuple xs -> xs |> List.forall (isValidAsPattern ctx)
-  | UApply (UVar x, _) -> ctx |> findVariant x None |> Option.isSome
-  | _ -> false
-
-
-let bindPattern pat t =
-  let rec bt pat t =
-    match (pat, t) with
-      | (UApply (UVar n, UTuple xs), Variant (_, _, cts))
-      | (UConstruct (n, xs), Variant (_, _, cts)) when (cts |> List.exists (fun (m, ts) -> m = n && List.length xs = List.length ts)) ->
-        let ts = cts |> List.find (fst >> ((=) n)) |> snd in
-        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UVar n, Variant (_, _, cts)) when (cts |> List.exists (fst >> ((=) n))) -> []
-      | (UApply (UVar n, x), Variant (_, _, _)) ->
-        bt (UApply (UVar n, UTuple [x])) t
-      | (UTuple xs, TypeOp("*", ts, _)) when (List.length xs = List.length ts) ->
-        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UVar "_", _)
-      | (ULiteral LUnit, Unit)
-      | (ULiteral (LBool _), Bool)
-      | (ULiteral (LNat _), Nat) -> []
-      | (UVar x, t) -> [ TermContext (x, t, UVar x) ]
-      | _ -> failwith "bindfailed"
-  in
-  try
-    bt pat t |> Some
-  with
-    | _ -> None
-
 // tx |> substIn "x" t
 // --> t [x <- tx]
 let substIn vname tsbj tvl =
@@ -302,7 +269,7 @@ let rec recon ctx uniq term =
     | UMatch (v, cases) ->
       let (v', tv, newUniq, cstr) = recon ctx uniq v in
       let (a, newUniq) = reconFromPatterns (UMatch (v, cases)) ctx uniq in
-      if ((getTimeOfType a |> snd) > 0) then
+      if ((getTimeOfType tv |> snd) > 0) then
         TermWithMessage ("the term '%s' is not pure and cannot be matched.", v') |> TyperFailed |> raise
       let (bs', tbs, u', css) = 
         let f = 
@@ -390,8 +357,82 @@ and reconFromPatterns mth ctx uniq =
   let cstr =
     ts |> List.map (fun t -> Constraint (TypeVar a, t, mth))
   in 
-  (TypeVar a |> substAll (unify cstr |> cstr_toAsgn), newUniq)
+  let rt = TypeVar a |> substAll (unify cstr |> cstr_toAsgn) in
+  exhaustiveCheck (pats |> List.map fst) rt;
+  (rt, newUniq)
 
+and isValidAsPattern ctx = function
+  | ULiteral _
+  | UVar _ -> true
+  | UConstruct (_, xs)
+  | UTuple xs -> xs |> List.forall (isValidAsPattern ctx)
+  | UApply (UVar x, _) -> ctx |> findVariant x None |> Option.isSome
+  | _ -> false
+
+and bindPattern pat t =
+  let rec bt pat t =
+    match (pat, t) with
+      | (UApply (UVar n, UTuple xs), Variant (_, _, cts))
+      | (UConstruct (n, xs), Variant (_, _, cts)) when (cts |> List.exists (fun (m, ts) -> m = n && List.length xs = List.length ts)) ->
+        let ts = cts |> List.find (fst >> ((=) n)) |> snd in
+        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
+      | (UVar n, Variant (_, _, cts)) when (cts |> List.exists (fst >> ((=) n))) -> []
+      | (UApply (UVar n, x), Variant (_, _, _)) ->
+        bt (UApply (UVar n, UTuple [x])) t
+      | (UTuple xs, TypeOp("*", ts, _)) when (List.length xs = List.length ts) ->
+        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
+      | (UVar "_", _)
+      | (ULiteral LUnit, Unit)
+      | (ULiteral (LBool _), Bool)
+      | (ULiteral (LNat _), Nat) -> []
+      | (UVar x, t) -> [ TermContext (x, t, UVar x) ]
+      | _ -> failwith "bindfailed"
+  in
+  try
+    bt pat t |> Some
+  with
+    | _ -> None
+
+and exhaustiveCheck ptns t =
+  let rec cartProd lol =
+    let f n = function
+      | [] -> [[n]]
+      | xss -> xss |> List.map (fun xs -> n :: xs)
+    in
+    match lol with
+      | [] -> []
+      | h :: t -> h |> List.collect (fun n -> f n (cartProd t))
+  in
+  let rec genReq = function
+    | Variant (_, _, cts) ->
+      cts |> List.map (fun (name, args) ->
+              args |> List.map genReq 
+                   |> cartProd
+                   |> (function 
+                        | [] -> [ UConstruct (name, []) ]
+                        | x -> x |> List.map (fun xs -> UConstruct (name, xs))
+                      )
+             ) 
+          |> List.concat
+    | TypeOp("*", ts, _) ->
+      ts |> List.map genReq |> cartProd |> List.map UTuple
+    | Unit -> [ ULiteral LUnit ]
+    | Nat -> [ UVar "{random Nat value}" ] // only matched with variable patterns
+    | Bool -> [ ULiteral (LBool true); ULiteral (LBool false)]
+    | TypeVar _ -> [ UVar "_" ] // only matched with variable patterns
+    | _ -> failwith "impossible_exhaustivenessCheck"
+  in
+  let possiblePatterns = genReq t in
+  let unmatched =
+    ptns |> List.fold (fun xs ptn ->
+        let xs' = xs |> List.filter (matchPattern ptn >> Option.isNone) in
+        xs'
+      ) possiblePatterns
+  in
+  if (List.length unmatched > 0) then
+    TermWithMessage ("The pattern match is not exhaustive.\nFor example, the value '%s' will fail.", unmatched |> List.head) |> TyperFailed |> raise
+  else
+    ()
 
 let pretify uniq t =
   let fv = getTyVars t in

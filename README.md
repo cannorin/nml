@@ -76,7 +76,7 @@ Note that each computation in each stage is kept pure functional; everything imp
 - [ ] Inductive data types (extends variant types)
     - [ ] Well-founded recursive functions (```let rec```)
 - [x] Pattern matching (```match```)
-    - [ ] Exhaustiveness check
+    - [x] Exhaustiveness check
     - [ ] Matching functions (```function```)
 - [ ] Operators
     - [ ] Operator definition (```let (+) l r = ...```)

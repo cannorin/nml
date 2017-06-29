@@ -12,9 +12,10 @@ let inline cprintfn color p x =
 let editor = new LineEditor ("nml", 300)
 let inline scan prompt = editor.Edit(prompt, "")
 
-let matchPattern t pat =
+let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
+      | (UConstruct (n, xs), UConstruct (m, ys))
       | (UApply (UVar n, UTuple xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat
       | (UApply (UVar n, x), UConstruct (m, _)) when n = m ->
