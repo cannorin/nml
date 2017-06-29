@@ -9,6 +9,7 @@ open FSharp.Collections
 exception ParserFailed of string
 
 let term, termRef = createParserForwardedToRef<UntypedTerm, unit>()
+// let typ, typRef = createParserForwardedToRef<Type, unit>()
 
 let ws x = x .>> spaces
 let syn x = pstring x |> ws
@@ -45,6 +46,14 @@ let name = identifier
 let op = genop false
 let op_user = genop true
 
+(*
+let type_nat = syn "Nat" >>% Nat
+let type_bool = syn "Bool" >>% Bool
+let type_unit = syn "Unit" >>% Unit
+let type_var = ws name |>> TypeVar
+let type_fun = (typ .>> syn "->") .>>. typ
+*)
+
 
 let unitparam = syn "()" |>> (fun x -> [x])
 
@@ -53,24 +62,16 @@ let literal_nat = ws pint32 <?> "int32" |>> (LNat >> ULiteral)
 let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> ULiteral)
 let literal_unit = syn "()" >>% ULiteral LUnit
 
-let makeTuple xs =
-  assert (xs <> []);
-  let (x :: ys) = xs in
-  if (List.isEmpty ys) then 
-    x
-  else
-    let (x' :: ys') = xs |> List.rev in
-    List.fold (fun t i -> UTuple(i, t)) x' ys'
-let expr_tuple = (term |> listing (syn ",")) |> between "(" ")" |>> makeTuple
+let inline (<+>) a b =
+  tuple2 a b |>> (fun (x, y) -> List.append [x] y)
+
+let expr_tuple = (term |> listing (syn ",")) |> between "(" ")" |>> (fun xs -> if (List.length xs = 1) then xs.[0] else UTuple xs)
 
 let makeFun (args, body) =
   match args with
     | "()" :: [] -> UFunUnit body
     | _ -> body |> List.foldBack (fun x t -> UFun(x, t)) args
 let expr_lambda = tuple2 (syn "fun" >>. (unitparam <|> sepEndBy1 name spaces1) .>> syn "->") term |>> makeFun
-
-let inline (<+>) a b =
-  tuple2 a b |>> (fun (x, y) -> List.append [x] y)
 
 let makeLet (vars, value, expr) =
   assert (vars <> []);
@@ -89,6 +90,8 @@ let expr_defer = syn "<(" >>. term .>> syn ")>" |>> UDefer
 
 let expr_if = tuple3 (syn "if" >>. term) (syn "then" >>. term) (syn "else" >>. term) |>> UIf
 
+let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. sepBy1 (tuple2 (term .>> syn "->") term) (syn "|")) |>> UMatch
+
 let expr_apply, eaRef = createParserForwardedToRef<UntypedTerm, unit>()
 //let expr_op2, opRef = createParserForwardedToRef<UntypedTerm, unit>()
 
@@ -103,6 +106,7 @@ let not_left_recursive =
     expr_let
     expr_defer
     expr_if
+    expr_match
     variable
     (syn "(" >>. ws expr_apply .>> syn ")")
   ]

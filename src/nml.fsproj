@@ -49,9 +49,11 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="ast.fs" />
     <Compile Include="helper.fs" />
+    <Compile Include="context.fs" />
     <Compile Include="eval.fs" />
     <Compile Include="typer.fs" />
     <Compile Include="parser.fs" />
+    <Compile Include="builtin.fs" />
     <Compile Include="main.fs" />
   </ItemGroup>
 </Project>

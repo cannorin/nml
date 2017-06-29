@@ -1,19 +1,35 @@
 module nml.Helper
 
 open nml.Ast
+open Mono.Terminal
 
 let inline (?|) x y = defaultArg x y
+let inline cprintfn color p x =
+  System.Console.ForegroundColor <- color;
+  printfn p x;
+  System.Console.ResetColor ()
 
-let rec isValue = function
-  | UApply (_, _)
-  | URun _
-  | ULet (_, _, _)
-  | ULetDefer (_, _, _) -> false
-  | UTuple (l, r) -> isValue l && isValue r
-  | UDefer x
-  | UFun (_, x) -> isValue x
-  | UExternal _
-  | _ -> true
+let editor = new LineEditor ("nml", 300)
+let inline scan prompt = editor.Edit(prompt, "")
+
+let matchPattern t pat =
+  let rec mt pat t =
+    match (pat, t) with
+      | (UApply (UVar n, UTuple xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
+        ys |> List.map2 mt xs |> List.concat
+      | (UApply (UVar n, x), UConstruct (m, _)) when n = m ->
+        mt (UApply (UVar n, UTuple [x])) t
+      | (UTuple xs, UTuple ys) when (List.length xs = List.length ys) ->
+        ys |> List.map2 mt xs |> List.concat
+      | (ULiteral x, ULiteral y) when x = y ->
+        []
+      | (UVar x, y) -> [(x, y)]
+      | _ -> failwith "matchfailed"
+  in 
+  try
+    mt pat t |> Some
+  with
+    | _ -> None
 
 let genUniq ng =
   let a = ng % 26 in
@@ -35,10 +51,16 @@ let rec foldApply args f =
       UApply(f, x) |> foldApply rest
     | [] -> f
 
+// [("a", A); ("b", B)] body --> let a = A in let b = B in body
+let rec foldLet body binds =
+  match binds with
+    | (name, value) :: rest ->
+      ULet (name, value, foldLet body rest)
+    | [] -> body
 
 // a -> b -> c -> d --> ([a; b; c], d)
 let rec expandFun = function
-  | Forall (_, t) -> expandFun t
+  | Scheme (_, t) -> expandFun t
   | Fun (a, Fun (b, c)) ->
     let (args, ret) = Fun (b, c) |> expandFun in
     (a :: args, ret)
@@ -53,13 +75,16 @@ let rec foldFun args ret =
     | a :: rest ->
       Fun(a, ret |> foldFun rest)
 
-
 let rec fvOf = function
   | TypeVar n -> set [n]
   | Fun (a, b) -> Set.union (fvOf a) (fvOf b)
   | Deferred t -> fvOf t
+  | Variant (_, vs, ts) -> 
+    ts |> List.map (snd >> (List.map fvOf)) 
+       |> List.concat
+       |> List.fold Set.union (set [])
+       |> Set.difference (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
   | TypeOp (_, ts, _) -> ts |> List.map fvOf |> List.fold Set.union (set [])
-  | Forall (vs, t)
   | Scheme (vs, t) -> Set.difference (fvOf t) vs
   | _ -> set []
 

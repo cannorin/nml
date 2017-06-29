@@ -2,30 +2,44 @@ module nml.Evaluation
 
 open nml.Ast
 open nml.Helper
+open nml.UniversalContext
 open Microsoft.FSharp.Collections
 
 let rec fvOfTerm = function
-  | UApply (l, r)
-  | UTuple (l, r) ->
+  | UApply (l, r) -> 
     Set.union (fvOfTerm l) (fvOfTerm r)
   | UDefer x -> fvOfTerm x
   | UFun (a, b) ->
     Set.difference (fvOfTerm b) (set [a])
-  | UIf (b, t, e) -> fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
+  | UIf (b, t, e) -> 
+    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
   | ULet (x, r, b)
   | ULetDefer (x, r, b) ->
     Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | UVar x -> set [x]
+  | UTuple xs
+  | UConstruct (_, xs) -> 
+    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
+  | UVar x when x <> "_" -> set [x]
+  | UMatch (v, cs) ->
+    cs 
+      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
+      |> List.concat
+      |> Set.ofList
+      |> Set.union (fvOfTerm v)
   | _ -> set []
 
 let rec hasVar vn = function
   | UVar n when (n = vn) -> true
   | UFun (a, b) when (a <> vn) -> hasVar vn b
-  | UTuple (l, r)
   | UApply (l, r) -> (hasVar vn l) || (hasVar vn r)
   | UIf (b, t, e) -> (hasVar vn b) || (hasVar vn t) || (hasVar vn e)
   | ULet (x, r, b)
   | ULetDefer (x, r, b) -> (hasVar vn r) || (x <> vn && hasVar vn b)
+  | UTuple xs
+  | UConstruct (_, xs) ->
+    xs |> List.exists (hasVar vn)
+  | UMatch (v, cs) ->
+    (hasVar vn v) || cs |> List.exists (fun (x, y) -> (hasVar vn x |> not) && (hasVar vn y))
   | URun x
   | UDefer x -> hasVar vn x
   | _ -> false
@@ -33,12 +47,17 @@ let rec hasVar vn = function
 let rec replace vn value = function
   | UVar n when (n = vn) -> value
   | UFun (a, b) when (a <> vn) -> UFun (a, b |> replace vn value) 
-  | UTuple (l, r) -> UTuple (l |> replace vn value, r |> replace vn value)
   | UApply (l, r) -> UApply (l |> replace vn value, r |> replace vn value)
+  | UTuple xs ->
+    UTuple (xs |> List.map (replace vn value))
+  | UConstruct (n, xs) ->
+    UConstruct (n, xs |> List.map (replace vn value))
   | UIf (b, t, e) -> UIf (b |> replace vn value, t |> replace vn value, e |> replace vn value)
   | ULet (x, r, b) -> ULet (x, r |> replace vn value, if (x <> vn) then b |> replace vn value else b)
   | ULetDefer (x, r, b) -> ULetDefer (x, r |> replace vn value, if (x <> vn) then b |> replace vn value else b)
   | URun x -> URun (x |> replace vn value)
+  | UMatch (v, cs) ->
+    UMatch (v |> replace vn value, cs |> List.map (fun (x, y) -> if (x |> hasVar vn) then (x, y) else (x, y |> replace vn value)))
   | UDefer x -> UDefer (x |> replace vn value)
   | x -> x
 
@@ -59,6 +78,8 @@ let getTimeOfTerm t =
           else 0
         | _ -> 0
     | UIf (_, t, e) -> max (g t) (g e)
+    | UMatch (_, cs) ->
+      cs |> List.map (snd >> g) |> List.max
     | _ -> 0
   in g t
 
@@ -90,7 +111,8 @@ let evalWithContext term ctx =
   let rec e ctx = function
     | UVar n ->
       ctx |> Map.tryFind n |> Option.map (e ctx) ?| UVar n
-    | UTuple (l, r) -> UTuple (l |> e ctx, r |> e ctx)
+    | UTuple xs -> UTuple (xs |> List.map (e ctx))
+    | UConstruct (n, xs) -> UConstruct (n, xs |> List.map (e ctx))
     | UFun (arg, body) -> UFun (arg, body |> e (ctx |> Map.remove arg)) |> aconvert
     | UFunUnit body -> UFunUnit (body |> e ctx)
     | UApply (f, x) ->
@@ -134,12 +156,18 @@ let evalWithContext term ctx =
       in
       if (time = 0) then
         ULet (x, r, b) |> e ctx
-      else if (isValue r') then
-        b' |> replace x (r' |> addRun time) |> delayTermBy time
       else
         ULet (x, r' |> addRun time, b') |> delayTermBy time
     | UDefer x ->
       x |> replaceAll ctx |> UDefer
+    | UMatch (v, pts) ->
+      let v' = v |> e ctx in
+        if (fvOfTerm v' |> Set.isEmpty) then
+          match (pts |> List.choose (fun (p, b) -> matchPattern v' p |> Option.map (fun x -> (b, x))) |> List.tryHead) with
+            | Some (body, bindings) -> body |> e (bindings |> List.fold (fun m (x, r) -> m |> Map.add x (r |> e ctx)) ctx)
+            | None -> failwith "match failed"
+          else
+        UMatch (v, pts) |> replaceAll ctx
     | URun x ->
       match (x |> e ctx) with
         | UDefer x' -> x' |> e ctx

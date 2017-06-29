@@ -1,5 +1,5 @@
-Nazo ML (nml) simplified ver.
-=============================
+Nazo ML (nml)
+=============
 
 This is an experimental implementation of temporal logic based Hindley-Milner type system.
 
@@ -63,11 +63,54 @@ mul (add x y) z
 
 Note that each computation in each stage is kept pure functional; everything impure will be done between discrete time stages, and once the stage is successfully transited it is certain that the computation at this stage will finite. 
 
-# TBD
+# TODO
 
-* Inductive data types and well-founded recursive functions
-* More practical things such as pattern matching, modules, etc
-* Future(◇) operator to describe infinite computation
+## Practical things
+
+- [x] Polymorphism
+    - [x] Let expression
+    - [x] Type operators (eg. tuples)
+    - [x] Forall quantifier
+- [x] Variants
+    - [x] With type parameters
+- [ ] Inductive data types (extends variant types)
+    - [ ] Well-founded recursive functions (```let rec```)
+- [x] Pattern matching (```match```)
+    - [ ] Exhaustiveness check
+    - [ ] Matching functions (```function```)
+- [ ] Operators
+    - [ ] Operator definition (```let (+) l r = ...```)
+    - [ ] Use as a function
+- [ ] Top-level expressions
+    - [ ] Type definition
+    - [ ] Modules
+    - [ ] On REPL
+
+## Type system extensions
+
+- [x] Next(○) type operator (``` <T> ```)
+    - [x] Code quotation (```<( t )>```)
+    - [x] Lifted let expression (```let!```)
+    - [ ] Macros (```macro```)
+- [ ] Dependent types
+    - [ ] Length-dependent List
+    - [ ] Compile-time type generation
+- [ ] Refinement types
+    - [ ] Assertions
+- [ ] Future(◇) type operator
+    - [ ] Infinite recursive functions (```let! rec```)
+    - [ ] Asynchronous computation
+
+## Runtime improvements
+- [x] REPL
+    - [x] Line editor
+    - [ ] Suggestions & completions
+    - [ ] Load and execute source files
+    - [ ] Import sources on the fly
+- [ ] Compiler
+- [ ] Interop
+    - [x] Built-in functions written in F# 
+    - [ ] Call .NET methods directly
 
 # License
 
