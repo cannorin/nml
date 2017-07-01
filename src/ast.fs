@@ -10,7 +10,6 @@ type Type =
   | Deferred of Type
   | TypeOp of string * Type list * (string * Printf.StringFormat<string -> string>) option
   | Scheme of Set<string> * Type
-  | Forall of Set<string> * Type
   override x.ToString() =
     let inline to_sc x =
       match x with
@@ -27,16 +26,11 @@ type Type =
       | TypeOp (n, [], _) -> n
       | TypeOp (n, ts, Some (c, f)) -> sprintf f (ts |> List.map to_sc |> String.concat c)
       | TypeOp (n, ts, None) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
-      | Forall (ts, t)
       | Scheme (ts, t) -> sprintf "∀%s. (%s)" (ts |> String.concat ", ") (to_s t)
 
-let TChar = TypeOp ("Char", [], None)
+let TTuple ts =
+  TypeOp("*", ts, Some(" * ", "%s"))
 
-let TTuple (t1, t2) =
-  TypeOp("*", [t1; t2], Some(" * ", "%s"))
-
-let TList t =
-  TypeOp("List", [t], None)
 
 type Literal =
   | LNat of int
@@ -62,7 +56,7 @@ type NameCompared<'T> =
 type UntypedTerm =
   | UVar of string
   | ULiteral of Literal
-  | UTuple of UntypedTerm * UntypedTerm
+  | UTuple of UntypedTerm list
   | UFun of string  * UntypedTerm
   | UFunUnit of UntypedTerm
   | UApply of UntypedTerm * UntypedTerm
@@ -76,7 +70,7 @@ type UntypedTerm =
     match x with
       | UVar name -> name
       | ULiteral l -> l.ToString()
-      | UTuple (a, b) -> sprintf "(%s, %s)" (to_s a) (to_s b)
+      | UTuple ts -> sprintf "(%s)" (ts |> List.map to_s |> String.concat ", ")
       | UFun (arg, body) -> sprintf "(fun %s -> %s)" (to_s arg) (to_s body)
       | UFunUnit body -> sprintf "(fun () -> %s)" (to_s body)
       | UApply (l, r) -> sprintf "(%s %s)" (to_s l) (to_s r)
@@ -91,5 +85,4 @@ type UntypedTerm =
 
 let ExternalFun nm typ f =
   UExternal({ name = nm; value = f }, typ)
-
 

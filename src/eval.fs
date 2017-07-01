@@ -2,30 +2,34 @@ module nml.Evaluation
 
 open nml.Ast
 open nml.Helper
+open nml.UniversalContext
 open Microsoft.FSharp.Collections
 
 let rec fvOfTerm = function
-  | UApply (l, r)
-  | UTuple (l, r) ->
+  | UApply (l, r) -> 
     Set.union (fvOfTerm l) (fvOfTerm r)
   | UDefer x -> fvOfTerm x
   | UFun (a, b) ->
     Set.difference (fvOfTerm b) (set [a])
-  | UIf (b, t, e) -> fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
+  | UIf (b, t, e) -> 
+    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
   | ULet (x, r, b)
   | ULetDefer (x, r, b) ->
     Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | UVar x -> set [x]
+  | UTuple xs ->
+    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
+  | UVar x when x <> "_" -> set [x]
   | _ -> set []
 
 let rec hasVar vn = function
   | UVar n when (n = vn) -> true
   | UFun (a, b) when (a <> vn) -> hasVar vn b
-  | UTuple (l, r)
   | UApply (l, r) -> (hasVar vn l) || (hasVar vn r)
   | UIf (b, t, e) -> (hasVar vn b) || (hasVar vn t) || (hasVar vn e)
   | ULet (x, r, b)
   | ULetDefer (x, r, b) -> (hasVar vn r) || (x <> vn && hasVar vn b)
+  | UTuple xs ->
+    xs |> List.exists (hasVar vn)
   | URun x
   | UDefer x -> hasVar vn x
   | _ -> false
@@ -33,8 +37,9 @@ let rec hasVar vn = function
 let rec replace vn value = function
   | UVar n when (n = vn) -> value
   | UFun (a, b) when (a <> vn) -> UFun (a, b |> replace vn value) 
-  | UTuple (l, r) -> UTuple (l |> replace vn value, r |> replace vn value)
   | UApply (l, r) -> UApply (l |> replace vn value, r |> replace vn value)
+  | UTuple xs ->
+    UTuple (xs |> List.map (replace vn value))
   | UIf (b, t, e) -> UIf (b |> replace vn value, t |> replace vn value, e |> replace vn value)
   | ULet (x, r, b) -> ULet (x, r |> replace vn value, if (x <> vn) then b |> replace vn value else b)
   | ULetDefer (x, r, b) -> ULetDefer (x, r |> replace vn value, if (x <> vn) then b |> replace vn value else b)
@@ -90,7 +95,7 @@ let evalWithContext term ctx =
   let rec e ctx = function
     | UVar n ->
       ctx |> Map.tryFind n |> Option.map (e ctx) ?| UVar n
-    | UTuple (l, r) -> UTuple (l |> e ctx, r |> e ctx)
+    | UTuple xs -> UTuple (xs |> List.map (e ctx))
     | UFun (arg, body) -> UFun (arg, body |> e (ctx |> Map.remove arg)) |> aconvert
     | UFunUnit body -> UFunUnit (body |> e ctx)
     | UApply (f, x) ->
@@ -134,8 +139,6 @@ let evalWithContext term ctx =
       in
       if (time = 0) then
         ULet (x, r, b) |> e ctx
-      else if (isValue r') then
-        b' |> replace x (r' |> addRun time) |> delayTermBy time
       else
         ULet (x, r' |> addRun time, b') |> delayTermBy time
     | UDefer x ->
