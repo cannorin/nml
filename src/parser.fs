@@ -28,23 +28,67 @@ let identifier : Parser<string, unit> =
       stream.BacktrackTo(state)
       Reply(Error, expectedIdentifier)
 
-let op_chars = "+-*/<>%&|^~=?:;".ToCharArray () |> Set.ofArray
-let op_reserved = set [ "::"; ";"; "->"; "="; "<>"; "&"; "|"; "&&"; "||"; ]
-let operatorString = many1Satisfy (op_chars |> isAnyOf)
-let genop isUser : Parser<string, unit> =
-  let expectedOperator = expected "operator"
-  fun stream ->
-    let state = stream.State
-    let reply = operatorString stream
-    if reply.Status = Ok && not (isUser && op_reserved |> Set.contains reply.Result) then
-      reply
-    else
-      stream.BacktrackTo(state)
-      Reply(Error, expectedOperator)
+let op_chars = "+-*/<>%&|^~=?:;.".ToCharArray() |> Set.ofArray
+let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>" ]
+
+let isSymbolicOperatorChar = isAnyOf op_chars
+//let remainingOpChars_ws = manySatisfy isSymbolicOperatorChar .>> spaces
+
+let opp = new OperatorPrecedenceParser<UntypedTerm, string, unit>()
+
+opp.OperatorConflictErrorFormatter <-
+  fun (pos1, op1, afterString1) (pos2, op2, afterString2) ->
+    let msg = sprintf "The operator '%s' conflicts with the previous operator '%s' at %A."
+                      (op2.String + afterString2)
+                      (op1.String + afterString1) pos1
+    in messageError msg
+
+let addOp2Ext prefix precedence associativity =
+  let op = InfixOperator (prefix, 
+                          manySatisfy (isAnyOf op_chars) .>> spaces,
+                          precedence, 
+                          associativity, 
+                          (),
+                          fun remOpChars expr1 expr2 -> UOp2 (expr1, prefix + remOpChars, expr2)
+                         )
+  in
+  opp.AddOperator(op)
+
+let addOp2Res x pcd asy =
+  for i in (op_chars |> Set.map (fun c -> sprintf "%s%c" x c) |> Set.filter (fun s -> op_reserved |> List.contains s |> not)) do
+    addOp2Ext i pcd asy
+
+// the operator definitions:
+addOp2Ext ";"  10 Associativity.Right
+addOp2Ext "|>" 15 Associativity.Left
+
+addOp2Ext "&&" 20 Associativity.Left
+addOp2Ext "||" 20 Associativity.Left
+
+addOp2Ext "&"  30 Associativity.Left
+addOp2Res "|"  30 Associativity.Left
+
+addOp2Ext "<"  30 Associativity.Left
+addOp2Ext ">"  30 Associativity.Left
+addOp2Ext "="  30 Associativity.Left
+
+addOp2Ext "^"  34 Associativity.Right
+
+addOp2Ext "::" 35 Associativity.Right
+
+addOp2Ext "+"  40 Associativity.Left
+addOp2Res "-"  40 Associativity.Left
+
+addOp2Ext "%"  50 Associativity.Left
+addOp2Ext "*"  50 Associativity.Left
+addOp2Ext "/"  50 Associativity.Left
+
+addOp2Ext "**" 60 Associativity.Right
+// end of definitions.
+
 
 let name = identifier
-let op = genop false
-let op_user = genop true
+let opvar = pstring "(" >>. many1Satisfy (isAnyOf op_chars) .>> pstring ")"
 
 (*
 let type_nat = syn "Nat" >>% Nat
@@ -57,7 +101,7 @@ let type_fun = (typ .>> syn "->") .>>. typ
 
 let unitparam = syn "()" |>> (fun x -> [x])
 
-let variable = ws name |>> UVar
+let variable = ws (name <|> opvar) |>> UVar
 let literal_nat = ws pint32 <?> "int32" |>> (LNat >> ULiteral)
 let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> ULiteral)
 let literal_unit = syn "()" >>% ULiteral LUnit
@@ -79,11 +123,14 @@ let makeLet (vars, value, expr) =
   if (List.length t = 0) then
     ULet (h, value, expr)
   else
-    ULet(h, makeFun (t, value), expr)
+    ULet (h, makeFun (t, value), expr)
+  
 let toDefer = function
   | ULet(n, r, b) -> ULetDefer(n, r, b)
   | x -> UDefer x
-let expr_let = tuple3 (syn "let" >>. (ws (name <|> (syn "(" >>. op_user .>> syn ")")) <+> (unitparam <|> sepEndBy name spaces1)) .>> syn "=") (term .>> syn "in") term |>>  makeLet
+
+let expr_let = tuple3 (syn "let" >>. (ws (name <|> opvar) <+> (unitparam <|> sepEndBy name spaces1)) .>> syn "=") (term .>> syn "in") term |>>  makeLet
+
 let expr_letdefer = tuple3 (syn "let!" >>. (ws name <+> (unitparam <|> sepEndBy name spaces1)) .>> syn "=") (term .>> syn "in") term |>>  (makeLet >> toDefer)
 
 let expr_defer = syn "<(" >>. term .>> syn ")>" |>> UDefer
@@ -93,13 +140,13 @@ let expr_if = tuple3 (syn "if" >>. term) (syn "then" >>. term) (syn "else" >>. t
 let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. sepBy1 (tuple2 (term .>> syn "->") term) (syn "|")) |>> UMatch
 
 let expr_apply, eaRef = createParserForwardedToRef<UntypedTerm, unit>()
-//let expr_op2, opRef = createParserForwardedToRef<UntypedTerm, unit>()
 
 let not_left_recursive = 
   choice [
     literal_nat
     literal_bool
     literal_unit
+    attempt variable
     expr_lambda
     expr_tuple
     expr_letdefer
@@ -107,11 +154,11 @@ let not_left_recursive =
     expr_defer
     expr_if
     expr_match
-    variable
-    (syn "(" >>. ws expr_apply .>> syn ")")
+    (syn "(" >>. ws (expr_apply <|> opp.ExpressionParser) .>> syn ")")
   ]
 
-do eaRef := tuple2 not_left_recursive (sepEndBy not_left_recursive spaces) |>> (fun (x, ys) -> 
+
+do eaRef := tuple2 not_left_recursive (sepEndBy1 not_left_recursive spaces) |>> (fun (x, ys) -> 
     if (List.isEmpty ys) then 
       x
     else
@@ -119,11 +166,14 @@ do eaRef := tuple2 not_left_recursive (sepEndBy not_left_recursive spaces) |>> (
   )
 
 do termRef := choice [
-    expr_apply
-    not_left_recursive
+    attempt expr_apply
+    opp.ExpressionParser
   ]
 
-let nml_term = attempt (spaces >>. term .>> spaces .>> eof)
+
+opp.TermParser <- attempt expr_apply <|> not_left_recursive
+
+let nml_term = spaces >>. term .>> spaces .>> eof
 
 let parseTerm text =
   match run nml_term text with

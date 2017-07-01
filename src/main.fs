@@ -48,7 +48,7 @@ let rec loop ctx inc =
       | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
       | TyperFailed (UnifyFailed (a, b, ut)) ->
         printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-      | TyperFailed (UnknownVar (n, _)) ->
+      | TyperFailed (UnknownVar (n, ctx)) ->
         printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
       | TyperFailed (NotMatchable (l, t, r)) ->
         printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)

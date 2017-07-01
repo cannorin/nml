@@ -197,12 +197,15 @@ let rec recon ctx uniq term =
           (UConstruct (n, args'), tvar, newUniq2, List.concat [ vcstrs'; cstrs ])
         | _
         | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
-    
+
+    | UOp2 (l, op, r) ->
+      UApply (UApply (UVar op, l), r) |> recon ctx uniq
+
     | UApply (l, r) ->
       let (l', tl, newUniq1, cstr1) = recon ctx uniq l in
       let (r', tr, newUniq2, cstr2) = recon ctx newUniq1 r in
       let (nv, newUniq3) = genUniq newUniq2 in
-      (UApply (l', r'), TypeVar nv, newUniq3, List.concat [ [ Constraint (tl, Fun (tr, TypeVar nv), UApply (l, r)) ]; cstr1; cstr2])
+      (UApply (l', r'), TypeVar nv, newUniq3, List.concat [ cstr2; cstr1; [ Constraint (tl, Fun (tr, TypeVar nv), UApply (l', r')) ] ])
     
     | UIf (b, t, e) ->
       let (b', tb, nu1, cs1) = recon ctx uniq b in

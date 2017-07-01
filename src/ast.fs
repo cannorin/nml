@@ -59,6 +59,11 @@ type NameCompared<'T> =
       | _ -> false
   override x.GetHashCode() = 0
 
+let inline handle_op s =
+  if (s |> String.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')) then
+    s
+  else
+    "(" + s + ")"
 
 type UntypedTerm =
   | UVar of string
@@ -76,12 +81,12 @@ type UntypedTerm =
   | ULetDefer of string * UntypedTerm * UntypedTerm
   // | UModuleVal of string * string
   | UExternal of NameCompared<UntypedTerm list -> UntypedTerm> * Type
-  // | UOp2 of UntypedTerm * string * UntypedTerm
+  | UOp2 of UntypedTerm * string * UntypedTerm
   | UMatch of UntypedTerm * (UntypedTerm * UntypedTerm) list
   | URun of UntypedTerm
   override x.ToString() =
     match x with
-      | UVar name -> name
+      | UVar name -> handle_op name
       | ULiteral l -> l.ToString()
       | UTuple ts -> sprintf "(%s)" (ts |> List.map to_s |> String.concat ", ")
       | UList ts -> sprintf "[%s]" (ts |> List.map to_s |> String.concat ", ")
@@ -93,20 +98,21 @@ type UntypedTerm =
       | UConstruct (n, ts) -> sprintf "%s (%s)" n (ts |> List.map to_s |> String.concat ", ")
       | UIf (b, t, e) -> sprintf "if %s then %s else %s" (to_s b) (to_s t) (to_s e)
       | ULet (name, value, body) ->
-        sprintf "let %s = %s in %s" (name) (to_s value) (to_s body)
+        sprintf "let %s = %s in %s" (handle_op name) (to_s value) (to_s body)
       // | ULetRec (name, value, body) ->
       //   sprintf "let rec %s = %s in %s" name (to_s value) (to_s body)
       | UDefer x -> sprintf "<( %s )>" (to_s x)
       | ULetDefer (name, value, body) ->
-        sprintf "let! %s = %s in %s" name (to_s value) (to_s body)
+        sprintf "let! %s = %s in %s" (handle_op name) (to_s value) (to_s body)
       // | UModuleVal (m, f) -> sprintf "%s.%s" m f
       | UExternal (f, _) -> f.name
-      // | UOp2 (x, op, y) -> sprintf "(%s %s %s)" (to_s x) op (to_s y)
+      | UOp2 (x, op, y) -> sprintf "(%s %s %s)" (to_s x) op (to_s y)
       | UMatch (v, cs) -> sprintf "match %s with %s" (to_s v) (cs |> List.map (fun (l, r) -> sprintf "%s -> %s" (to_s l) (to_s r)) |> String.concat " | ")
       | URun x -> sprintf "(run %s)" (to_s x)
 
 let ExternalFun nm typ f =
   UExternal({ name = nm; value = f }, typ)
+
 
 (*
 type TopLevel =

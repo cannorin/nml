@@ -39,7 +39,7 @@ let rec hasVar vn = function
   | UConstruct (_, xs) ->
     xs |> List.exists (hasVar vn)
   | UMatch (v, cs) ->
-    (hasVar vn v) || cs |> List.exists (fun (x, y) -> (hasVar vn x |> not) && (hasVar vn y))
+    (hasVar vn v) || cs |> List.exists (fun (x, y) -> (hasVar vn x) || (hasVar vn y))
   | URun x
   | UDefer x -> hasVar vn x
   | _ -> false
@@ -101,11 +101,13 @@ let rec delayTermBy i t =
 
 let evalWithContext term ctx =
   let uniq = ref 0 in
-  let aconvert = function
+  let rec aconvert = function
     | UFun (arg, body) ->
       let (na, newuniq) = genUniq !uniq in
       uniq := newuniq;
-      UFun (na, body |> replace arg (UVar na))
+      if (ctx |> Map.tryFind na |> Option.isNone && body |> hasVar na |> not) then
+        UFun (na, body |> replace arg (UVar na))
+      else UFun (arg, body) |> aconvert
     | x -> x
   in
   let rec e ctx = function
@@ -130,8 +132,8 @@ let evalWithContext term ctx =
               if (List.length args = List.length targs && args' |> List.forall (fvOfTerm >> Set.isEmpty)) then
                 let (tret', time) = getTimeOfType tret in
                 if (time > 0) then
-                   let ef' = UExternal ({ name = ef.name; value = (ef.value >> addRun time) }, foldFun targs tret') in
-                   ef' |> foldApply args' |> addRun time |> delayTermBy time
+                  let ef' = UExternal ({ name = ef.name; value = (ef.value >> addRun time) }, foldFun targs tret') in
+                  ef' |> foldApply args' |> addRun time |> delayTermBy time
                 else
                   let r = args' |> ef.value in
                   r |> e ctx
@@ -164,10 +166,10 @@ let evalWithContext term ctx =
       let v' = v |> e ctx in
         if (fvOfTerm v' |> Set.isEmpty) then
           match (pts |> List.choose (fun (p, b) -> matchPattern p v' |> Option.map (fun x -> (b, x))) |> List.tryHead) with
-            | Some (body, bindings) -> body |> e (bindings |> List.fold (fun m (x, r) -> m |> Map.add x (r |> e ctx)) ctx)
+            | Some (body, bindings) -> foldLet body bindings |> e ctx
             | None -> failwith "match failed"
-          else
-        UMatch (v, pts) |> replaceAll ctx
+        else
+          UMatch (v |> e ctx, pts)
     | URun x ->
       match (x |> e ctx) with
         | UDefer x' -> x' |> e ctx
