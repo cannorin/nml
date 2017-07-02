@@ -78,9 +78,9 @@ Note that each computation in each stage is kept pure functional; everything imp
 - [x] Pattern matching (```match```)
     - [x] Exhaustiveness check
     - [ ] Matching functions (```function```)
-- [ ] Operators
-    - [ ] Operator definition (```let (+) l r = ...```)
-    - [ ] Use as a function
+- [x] Operators
+    - [x] Operator definition (```let (+) l r = ...```)
+    - [x] Use as a function
 - [ ] Top-level expressions
     - [ ] Type definition
     - [ ] Modules
