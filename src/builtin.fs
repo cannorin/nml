@@ -16,6 +16,9 @@ let DefType t =
 let DefVariant name ts =
   TypeContext (Variant (name, [], ts))
 
+let DefInductiveVariant name f =
+  TypeContext (InductiveVariant (name, [], f))
+
 let DefPolyVariant name targs ts =
   TypeContext (Variant (name, targs |> List.map TypeVar, ts))
 
@@ -25,6 +28,7 @@ let DefPolyInductiveVariant name targs f =
 let builtinTypes = [
   DefPolyVariant "Option" ["a"] [ ("Some", [TypeVar "a"]); ("None", []) ];
   DefPolyVariant "Either" ["a"; "b"] [ ("Left", [TypeVar "a"]); ("Right", [TypeVar "b"]) ];
+  DefInductiveVariant "Nat" (fun self -> [ ("Succ", [self]); ("0", []) ]);
   DefPolyInductiveVariant "List" ["a"] (fun self -> [ ("Nil", []); ("Cons", [TypeVar "a"; self]) ])
 ]
 
@@ -68,7 +72,7 @@ let addTerm name term ctx =
 let builtinTerms = [
   RawTerm "id" "fun x -> x";
   DefFun "exit" (Fun(Nat, Deferred Unit)) (function
-    | ULiteral (LNat x) :: _ -> Environment.Exit(x); ULiteral LUnit
+    | ULiteral (LNat x) :: _ -> Environment.Exit(int32 x); ULiteral LUnit
     | _ -> impossible
   );
   DefFun "+" (foldFun [Nat; Nat] Nat) (function
@@ -81,6 +85,15 @@ let builtinTerms = [
   );
   DefFun "%" (foldFun [Nat; Nat] Nat) (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> LNat (a % b) |> ULiteral
+    | _ -> impossible
+  );
+  RawTerm "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
+  DefFun "-?" (foldFun [Nat; Nat] (TOption Nat)) (function
+    | ULiteral (LNat a) :: ULiteral (LNat b) :: _ ->
+      if (a > b) then
+        UConstruct ("Some", [LNat (a - b) |> ULiteral])
+      else
+        UConstruct ("None", [])
     | _ -> impossible
   );
   DefPolyFun "=" ["a"] (foldFun [TypeVar "a"; TypeVar "a"] Bool) (function
@@ -114,7 +127,7 @@ let builtinTerms = [
   RawTerm "ignore" "fun _ -> ()";
   DefFun "readNat" (Fun(Unit, Deferred Nat)) (fun _ ->
       scan "readNat> " 
-        |> int32
+        |> uint32
         |> LNat |> ULiteral |> UDefer 
   );
   DefPolyFun "print" ["a"] (Fun (TypeVar "a", Deferred Unit)) (function

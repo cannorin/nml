@@ -15,6 +15,11 @@ let inline scan prompt = editor.Edit(prompt, "")
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
+      | (UApply (UVar "Succ", pred), ULiteral (LNat n))
+      | (UConstruct ("Succ", [pred]), ULiteral (LNat n)) when n > 0u ->
+        mt pred (ULiteral (LNat (n - 1u)))
+      | (UConstruct ("0", []), ULiteral (LNat 0u)) ->
+        []
       | (UConstruct (n, xs), UConstruct (m, ys))
       | (UApply (UVar n, UTuple xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat

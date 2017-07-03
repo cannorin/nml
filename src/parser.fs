@@ -120,7 +120,7 @@ let type_app = sepEndBy1 typ spaces1 |>> (fun ts ->
 let unitparam = syn "()" |>> (fun x -> [x])
 
 let variable = ws (name <|> opvar) |>> UVar
-let literal_nat = ws pint32 <?> "int32" |>> (LNat >> ULiteral)
+let literal_nat = ws puint32 <?> "Nat" |>> (LNat >> ULiteral)
 let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> ULiteral)
 let literal_unit = syn "()" >>% ULiteral LUnit
 

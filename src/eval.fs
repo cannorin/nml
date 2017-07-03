@@ -114,6 +114,8 @@ let evalWithContext term ctx =
     | UVar n ->
       ctx |> Map.tryFind n |> Option.map (e ctx) ?| UVar n
     | UTuple xs -> UTuple (xs |> List.map (e ctx))
+    | UConstruct ("Succ", [x]) ->
+      UApply (UApply (UVar "+", x), ULiteral (LNat 1u)) |> e ctx
     | UConstruct (n, xs) -> UConstruct (n, xs |> List.map (e ctx))
     | UFun (arg, body) -> UFun (arg, body |> e (ctx |> Map.remove arg)) |> aconvert
     | UFunUnit body -> UFunUnit (body |> e ctx)

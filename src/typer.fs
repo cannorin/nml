@@ -293,6 +293,7 @@ let rec recon ctx uniq term =
           match (ctx |> findVariant x (Some [])) with
             | Some _ -> UConstruct (x, [])
             | None -> UVar x
+        | ULiteral (LNat 0u) -> UConstruct ("0", [])
         | x -> x
       in
       let cases = cases |> List.map (fun (ptn, body) -> (expandCases ptn, body)) in
@@ -424,8 +425,7 @@ and bindPattern pat t ctx =
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
       | (UVar "_", _)
       | (ULiteral LUnit, Unit)
-      | (ULiteral (LBool _), Bool)
-      | (ULiteral (LNat _), Nat) -> []
+      | (ULiteral (LBool _), Bool) -> []
       | (UVar x, t) -> [ TermContext (x, t, UVar x) ]
       | _ -> failwith "bindfailed"
   in
@@ -491,7 +491,6 @@ and exhaustiveCheck ptns t ctx =
     | TypeOp ("*", ts, _) ->
       ts |> List.map (genReq mp) |> cartProd |> List.map UTuple
     | Unit -> [ ULiteral LUnit ]
-    | Nat -> [ UVar "{random Nat value}" ] // only matched with variable patterns
     | Bool -> [ ULiteral (LBool true); ULiteral (LBool false)]
     | TypeOp (name, ts, _) ->
       match (ctx |> findType name) with

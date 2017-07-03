@@ -23,7 +23,7 @@ type NameCompared<'T> =
 
 type Type =
   | TypeVar of string
-  | Nat | Bool | Unit
+  | Bool | Unit
   | Fun of Type * Type
   | Deferred of Type
   | TypeOp of string * Type list * EqualityNull<(string * Printf.StringFormat<string -> string>) option>
@@ -32,13 +32,14 @@ type Type =
   override x.ToString() =
     let inline to_sc x =
       match x with
-        | TypeVar _ | Nat | Bool | Unit | Deferred _ -> to_s x
-        | TypeOp (n, ts, _) when (List.length ts = 0) -> n
+        | TypeVar _ | Bool | Unit | Deferred _ -> to_s x
+        | TypeOp (n, [], _)
+        | Variant (n, [], _) -> n
         | c -> "(" + (to_s c) + ")"
     in
     match x with
       | TypeVar s -> s
-      | Nat -> "Nat" | Bool -> "Bool"
+      | Bool -> "Bool"
       | Unit -> "Unit"
       | Fun (a, b) -> sprintf "%s -> %s" (to_sc a) (to_s b)
       | Deferred t -> sprintf "<%s>" (to_s t)
@@ -63,8 +64,14 @@ let InductiveVariant (n, ts, f) =
 let TList a =
   InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]))
 
+let TOption a =
+  Variant ("Option", [a], [ ("Some", [a]); ("None", []) ]);
+
+let Nat = 
+  InductiveVariant ("Nat", [], (fun self -> [ ("Succ", [self]); ("0", []) ]))
+
 type Literal =
-  | LNat of int
+  | LNat of uint32
   | LBool of bool
   | LUnit
   override x.ToString() =
