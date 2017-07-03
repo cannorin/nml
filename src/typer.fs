@@ -425,6 +425,7 @@ and bindPattern pat t ctx =
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
       | (UVar "_", _)
       | (ULiteral LUnit, Unit)
+      | (ULiteral (LNat _), Variant ("Nat", _, _))
       | (ULiteral (LBool _), Bool) -> []
       | (UVar x, t) -> [ TermContext (x, t, UVar x) ]
       | _ -> failwith "bindfailed"
