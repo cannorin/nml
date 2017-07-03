@@ -63,11 +63,11 @@ let main argv =
   printfn "nml REPL ver.???";
   printfn "";
   printfn "type <term>;; to execute a term.";
-  printfn " term := 0,1,... | true | false | (t,t,...) | x";
-  printfn "       | fun x -> t | t t | if t then t else t";
-  printfn "       | let x = t in t | <( t )> | let! x = t in t";
-  printfn "       | let f x y... = t in t | fun x y... -> t";
-  printfn "       | let f () = t in t | fun () -> t";
+  printfn " term := 0, 1, .. | true | false | (t, t, ..) | [t; t; ..]";
+  printfn "       | x | t t | t; t | fun x y .. -> t | fun () -> t ";
+  printfn "       | let x = t in t | let f x .. = t in t | let f () = t in t";
+  printfn "       | if t then t else t | match t with t -> t ..";
+  printfn "       | <( t )> | let! x = t in t | t !; t";
   printfn "";
   printfn "type 'showVars;;' to show predefined functions.";
   printfn "example: let! x = readNat () in";

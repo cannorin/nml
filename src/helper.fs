@@ -95,4 +95,25 @@ let getTimeOfType ty =
     | x -> (x, i)
   in dig 0 ty
 
+let rec hasSelf name args = function
+  | Variant (n, ts, _)
+  | TypeOp (n, ts, _) when (n = name && ts = args) -> true
+  | Fun (a, b) -> hasSelf name args a || hasSelf name args b
+  | Scheme (_, t)
+  | Deferred t -> hasSelf name args t
+  | TypeOp (_, ts, _) -> ts |> List.exists (fun t -> hasSelf name args t)
+  | _ -> false
+
+let rec isInductive vt =
+  match vt with
+    | Variant (vname, vtargs, cts) ->
+      let hasRec = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs)) in
+      let hasBottom = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs >> not)) in
+      if (hasRec && hasBottom) then
+        Some true
+      else if hasRec then
+        None
+      else
+        Some false
+    | _ -> Some false
 

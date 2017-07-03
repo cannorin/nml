@@ -19,9 +19,13 @@ let DefVariant name ts =
 let DefPolyVariant name targs ts =
   TypeContext (Variant (name, targs |> List.map TypeVar, ts))
 
+let DefPolyInductiveVariant name targs f =
+  TypeContext (InductiveVariant (name, targs |> List.map TypeVar, f))
+
 let builtinTypes = [
   DefPolyVariant "Option" ["a"] [ ("Some", [TypeVar "a"]); ("None", []) ];
   DefPolyVariant "Either" ["a"; "b"] [ ("Left", [TypeVar "a"]); ("Right", [TypeVar "b"]) ];
+  DefPolyInductiveVariant "List" ["a"] (fun self -> [ ("Nil", []); ("Cons", [TypeVar "a"; self]) ])
 ]
 
 let impossible = ULiteral LUnit
@@ -83,6 +87,14 @@ let builtinTerms = [
     | a :: b :: _ -> (a = b) |> LBool |> ULiteral
     | _ -> impossible
   );
+  DefPolyFun "<>" ["a"] (foldFun [TypeVar "a"; TypeVar "a"] Bool) (function
+    | a :: b :: _ -> (a <> b) |> LBool |> ULiteral
+    | _ -> impossible
+  );
+  DefFun "not" (Fun (Bool, Bool)) (function
+    | ULiteral (LBool b) :: _ -> not b |> LBool |> ULiteral
+    | _ -> impossible
+  );
   DefFun ">" (foldFun [Nat; Nat] Bool) (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> (a > b) |> LBool |> ULiteral
     | _ -> impossible
@@ -127,7 +139,11 @@ let builtinTerms = [
   RawTerm "<||" "fun f x -> match x with (a, b) -> f a b";
   RawTerm "<|||" "fun f x -> match x with (a, b, c) -> f a b c";
   RawTerm ">>" "fun f g x -> g (f x)";
-  RawTerm "<<" "fun g f x -> g (f x)"
+  RawTerm "<<" "fun g f x -> g (f x)";
+  RawTerm "?|" "fun x d -> match x with Some x -> x | None -> d";
+  RawTerm ";" "fun a b -> let _ = a in b";
+  RawTerm "!;" "fun a b -> let! _ = a in b";
+  RawTerm "::" "fun x t -> Cons (x, t)";
 ]
 
 let defaultContext = List.append builtinTypes builtinTerms

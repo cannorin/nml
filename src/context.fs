@@ -24,8 +24,11 @@ let printContext ctx =
             )) |> String.concat " | " in
         printfn "- type %s = %s" s cs
       | TermContext (n, ty, te) ->
-        printfn "- let %s : %s" n (to_s ty)
+        printfn "- let %s : %s" (handle_op n) (to_s ty)
       | _ -> ()
+
+let findType name ctx =
+  ctx |> List.choose (function | TypeContext (Variant (vs, ts, cts)) when vs = name -> Variant (vs, ts, cts) |> Some | _ -> None) |> List.tryHead
 
 let findVariant name args ctx =
   let al = args |> Option.map List.length in

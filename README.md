@@ -73,7 +73,7 @@ Note that each computation in each stage is kept pure functional; everything imp
     - [x] Forall quantifier
 - [x] Variants
     - [x] With type parameters
-- [ ] Inductive data types (extends variant types)
+- [x] Inductive data types (extends variant types)
     - [ ] Well-founded recursive functions (```let rec```)
 - [x] Pattern matching (```match```)
     - [x] Exhaustiveness check

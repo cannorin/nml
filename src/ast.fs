@@ -1,6 +1,24 @@
 module nml.Ast
 
 let inline to_s x = x.ToString()
+  
+[<CustomEquality; NoComparison>]
+type EqualityNull<'T> = 
+  | Value of 'T
+  override x.Equals(yobj) =
+    match yobj with
+      | :? EqualityNull<'T> as y -> true
+      | _ -> false
+  override x.GetHashCode() = 0
+
+[<CustomEquality; NoComparison>]
+type NameCompared<'T> = 
+  { value: 'T; name: string }
+  override x.Equals(yobj) =
+    match yobj with
+      | :? NameCompared<'T> as y -> x.name = y.name
+      | _ -> false
+  override x.GetHashCode() = 0
 
 
 type Type =
@@ -8,7 +26,7 @@ type Type =
   | Nat | Bool | Unit
   | Fun of Type * Type
   | Deferred of Type
-  | TypeOp of string * Type list * (string * Printf.StringFormat<string -> string>) option
+  | TypeOp of string * Type list * EqualityNull<(string * Printf.StringFormat<string -> string>) option>
   | Variant of string * Type list * (string * Type list) list
   | Scheme of Set<string> * Type
   override x.ToString() =
@@ -25,19 +43,25 @@ type Type =
       | Fun (a, b) -> sprintf "%s -> %s" (to_sc a) (to_s b)
       | Deferred t -> sprintf "<%s>" (to_s t)
       | TypeOp (n, [], _) -> n
-      | TypeOp (n, ts, Some (c, f)) -> sprintf f (ts |> List.map to_sc |> String.concat c)
-      | TypeOp (n, ts, None) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
+      | TypeOp (n, ts, Value (Some (c, f))) -> sprintf f (ts |> List.map to_sc |> String.concat c)
+      | TypeOp (n, ts, Value None) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
       | Variant (n, [], _) -> n
       | Variant (n, ts, _) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n 
       | Scheme (ts, t) -> sprintf "∀%s. (%s)" (ts |> String.concat ", ") (to_s t)
 
 //let TChar = TypeOp ("Char", [], None)
 
-let TTuple ts =
-  TypeOp("*", ts, Some(" * ", "%s"))
+let NewTypeOp (tn, ts, o) =
+  TypeOp (tn, ts, Value o)
 
-//let TList t =
-//  TypeOp("List", [t], None)
+let TTuple ts =
+  NewTypeOp ("*", ts, Some(" * ", "%s"))
+
+let InductiveVariant (n, ts, f) =
+  Variant (n, ts, TypeOp (n, ts, Value None) |> f)
+
+let TList a =
+  InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]))
 
 type Literal =
   | LNat of int
@@ -48,16 +72,6 @@ type Literal =
       | LNat i -> i.ToString()
       | LBool b -> if b then "true" else "false"
       | LUnit -> "()"
-
-
-[<CustomEquality; NoComparison>]
-type NameCompared<'T> = 
-  { value: 'T; name: string }
-  override x.Equals(yobj) =
-    match yobj with
-      | :? NameCompared<'T> as y -> x.name = y.name
-      | _ -> false
-  override x.GetHashCode() = 0
 
 let inline handle_op s =
   if (s |> String.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')) then
@@ -89,7 +103,7 @@ type UntypedTerm =
       | UVar name -> handle_op name
       | ULiteral l -> l.ToString()
       | UTuple ts -> sprintf "(%s)" (ts |> List.map to_s |> String.concat ", ")
-      | UList ts -> sprintf "[%s]" (ts |> List.map to_s |> String.concat ", ")
+      | UList ts -> sprintf "[%s]" (ts |> List.map to_s |> String.concat "; ")
       | UFun (arg, body) -> sprintf "(fun %s -> %s)" (to_s arg) (to_s body)
       | UFunUnit body -> sprintf "(fun () -> %s)" (to_s body)
       | UApply (l, r) -> sprintf "(%s %s)" (to_s l) (to_s r)

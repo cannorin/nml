@@ -9,7 +9,7 @@ open FSharp.Collections
 exception ParserFailed of string
 
 let term, termRef = createParserForwardedToRef<UntypedTerm, unit>()
-// let typ, typRef = createParserForwardedToRef<Type, unit>()
+//let typ, typRef = createParserForwardedToRef<Type, unit>()
 
 let ws x = x .>> spaces
 let syn x = pstring x |> ws
@@ -17,7 +17,7 @@ let between s1 s2 p = syn s1 >>. p .>> syn s2
 let listing sep x =
   sepBy1 x sep
 let reserved = set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; "true"; "false"; "run"; "if"; "then"; "else"; "type"; "match"; "with";  ]
-let identifierString = many1Satisfy (List.concat [['a'..'z']; ['A'..'z']; ['_']; ['0'..'9']] |> isAnyOf)
+let identifierString = many1Satisfy (List.concat [['a'..'z']; ['A'..'Z']; ['_']; ['0'..'9']] |> isAnyOf)
 let identifier : Parser<string, unit> =
   let expectedIdentifier = expected "identifier"
   fun stream ->
@@ -28,7 +28,7 @@ let identifier : Parser<string, unit> =
       stream.BacktrackTo(state)
       Reply(Error, expectedIdentifier)
 
-let op_chars = "+-*/<>%&|^~=?:;.".ToCharArray() |> Set.ofArray
+let op_chars = "+-*/<>%&|^~=!?:;.".ToCharArray() |> Set.ofArray
 let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>" ]
 
 let isSymbolicOperatorChar = isAnyOf op_chars
@@ -59,6 +59,7 @@ let addOp2Res x pcd asy =
     addOp2Ext i pcd asy
 
 // the operator definitions:
+addOp2Ext "!;" 10 Associativity.Right
 addOp2Ext ";"  10 Associativity.Right
 addOp2Ext "|>" 15 Associativity.Left
 
@@ -74,6 +75,7 @@ addOp2Ext "="  30 Associativity.Left
 
 addOp2Ext "^"  34 Associativity.Right
 
+addOp2Ext "?|" 35 Associativity.Left
 addOp2Ext "::" 35 Associativity.Right
 
 addOp2Ext "+"  40 Associativity.Left
@@ -94,8 +96,24 @@ let opvar = pstring "(" >>. many1Satisfy (isAnyOf op_chars) .>> pstring ")"
 let type_nat = syn "Nat" >>% Nat
 let type_bool = syn "Bool" >>% Bool
 let type_unit = syn "Unit" >>% Unit
-let type_var = ws name |>> TypeVar
-let type_fun = (typ .>> syn "->") .>>. typ
+let type_var = ws name |>> TypeName
+let type_fun = sepEndBy1 typ (syn "->") |>> (fun ts -> 
+    match (ts |> List.rev) with
+      | t :: [] -> t
+      | rt :: argst -> foldFun (argst |> List.rev) rt
+      | [] -> failwith "impossible"
+  )
+let type_tuple = sepEndBy1 typ (syn "*") |>> (fun ts ->
+    match ts with
+      | t :: [] -> t
+      | [] -> failwith "impossible"
+      | xs -> TTuple xs
+  )
+let type_app = sepEndBy1 typ spaces1 |>> (fun ts ->
+    match (ts |> List.rev with)
+      | t :: [] -> t
+      | (TypeName x) :: argst -> TypeOp (x, argst |> List.rev, None)
+      | _ -> failwith "impossible"
 *)
 
 
@@ -110,6 +128,14 @@ let inline (<+>) a b =
   tuple2 a b |>> (fun (x, y) -> List.append [x] y)
 
 let expr_tuple = (term |> listing (syn ",")) |> between "(" ")" |>> (fun xs -> if (List.length xs = 1) then xs.[0] else UTuple xs)
+
+let makeList t = 
+  let rec m = function
+    | [UOp2 (l, ";", r)] -> l :: m [r]
+    | x -> x
+  in m t |> UList
+
+let expr_list = (sepEndBy term (syn ";")) |> between "[" "]" |>> makeList
 
 let makeFun (args, body) =
   match args with
@@ -149,6 +175,7 @@ let not_left_recursive =
     attempt variable
     expr_lambda
     expr_tuple
+    expr_list
     expr_letdefer
     expr_let
     expr_defer
@@ -156,7 +183,6 @@ let not_left_recursive =
     expr_match
     (syn "(" >>. ws (expr_apply <|> opp.ExpressionParser) .>> syn ")")
   ]
-
 
 do eaRef := tuple2 not_left_recursive (sepEndBy1 not_left_recursive spaces) |>> (fun (x, ys) -> 
     if (List.isEmpty ys) then 
