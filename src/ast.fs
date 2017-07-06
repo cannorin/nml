@@ -97,7 +97,7 @@ type UntypedTerm =
   | UConstruct of string * UntypedTerm list
   | UIf of UntypedTerm * UntypedTerm * UntypedTerm
   | ULet of string * UntypedTerm * UntypedTerm
-  //| ULetRec of string * UntypedTerm * UntypedTerm
+  | UFixMatch of string * (UntypedTerm * UntypedTerm) list
   | UDefer of UntypedTerm
   | ULetDefer of string * UntypedTerm * UntypedTerm
   // | UModuleVal of string * string
@@ -120,14 +120,13 @@ type UntypedTerm =
       | UIf (b, t, e) -> sprintf "if %s then %s else %s" (to_s b) (to_s t) (to_s e)
       | ULet (name, value, body) ->
         sprintf "let %s = %s in %s" (handle_op name) (to_s value) (to_s body)
-      // | ULetRec (name, value, body) ->
-      //   sprintf "let rec %s = %s in %s" name (to_s value) (to_s body)
       | UDefer x -> sprintf "<( %s )>" (to_s x)
       | ULetDefer (name, value, body) ->
         sprintf "let! %s = %s in %s" (handle_op name) (to_s value) (to_s body)
       // | UModuleVal (m, f) -> sprintf "%s.%s" m f
       | UExternal (f, _) -> f.name
       | UOp2 (x, op, y) -> sprintf "(%s %s %s)" (to_s x) op (to_s y)
+      | UFixMatch (s, cs) -> sprintf "fixpoint %s of %s" s (cs |> List.map (fun (l, r) -> sprintf "%s -> %s" (to_s l) (to_s r)) |> String.concat " | ")
       | UMatch (v, cs) -> sprintf "match %s with %s" (to_s v) (cs |> List.map (fun (l, r) -> sprintf "%s -> %s" (to_s l) (to_s r)) |> String.concat " | ")
       | URun x -> sprintf "(run %s)" (to_s x)
 

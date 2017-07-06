@@ -1,0 +1,29 @@
+let nested_fixp = 
+  fixpoint f of
+    Succ n -> (fixpoint g of Succ m -> (g m) + (f n) + 1 | 0 -> n) (n + 1)
+  | 0 -> 0
+in
+
+nested_fixp 4 |> print !;
+
+let range =
+  fixpoint f of
+    Succ n -> n :: f n
+  | 0 -> [0]
+in
+
+let map f =
+  fixpoint g of
+    h :: t -> f h :: g t
+  | [] -> []
+in
+
+let grow_list =
+  fixpoint f of
+    x :: t -> range x |> map (fun _ -> f t)
+  | [] -> []
+in
+
+grow_list (range 5) |> print !;
+
+()

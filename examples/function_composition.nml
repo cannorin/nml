@@ -1,0 +1,31 @@
+let add n x = x + n in
+let times n x = x * n in
+let add1Times2 = add 1 >> times 2 in
+let add5Times3 = add 5 >> times 3 in
+
+add1Times2 3 |> print !;
+add5Times3 1 |> print !;
+
+let twice f = f >> f in
+let add1 = (+) 1 in
+let add1Twice = twice add1 in
+
+add1Twice 9 |> print !;
+
+let add1ThenMultiply = (+) 1 >> (*) in
+
+add1ThenMultiply 2 7 |> print !;
+
+let doSomething x y z = x + y + z in
+
+3 |> doSomething 1 2 |> print !;
+
+let myList = [] in
+let isEmpty = function [] -> true | _ -> false in
+
+myList |> isEmpty |> not |> print !;
+
+myList |> (not << isEmpty) |> print !;
+
+()
+

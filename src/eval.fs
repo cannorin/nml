@@ -5,29 +5,6 @@ open nml.Helper
 open nml.UniversalContext
 open Microsoft.FSharp.Collections
 
-let rec fvOfTerm = function
-  | UApply (l, r) -> 
-    Set.union (fvOfTerm l) (fvOfTerm r)
-  | UDefer x -> fvOfTerm x
-  | UFun (a, b) ->
-    Set.difference (fvOfTerm b) (set [a])
-  | UIf (b, t, e) -> 
-    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
-  | ULet (x, r, b)
-  | ULetDefer (x, r, b) ->
-    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | UTuple xs
-  | UConstruct (_, xs) -> 
-    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
-  | UVar x when x <> "_" -> set [x]
-  | UMatch (v, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.union (fvOfTerm v)
-  | _ -> set []
-
 let rec hasVar vn = function
   | UVar n when (n = vn) -> true
   | UFun (a, b) when (a <> vn) -> hasVar vn b
@@ -39,9 +16,11 @@ let rec hasVar vn = function
   | UConstruct (_, xs) ->
     xs |> List.exists (hasVar vn)
   | UMatch (v, cs) ->
-    (hasVar vn v) || cs |> List.exists (fun (x, y) -> (hasVar vn x) || (hasVar vn y))
+    (hasVar vn v) || cs |> List.exists (fun (x, y) -> (hasVar vn x |> not) && (hasVar vn y))
   | URun x
   | UDefer x -> hasVar vn x
+  | UFixMatch (self, cases) when vn <> self ->
+    cases |> List.exists (fun (x, y) -> (hasVar vn x |> not) && (hasVar vn y))
   | _ -> false
 
 let rec replace vn value = function
@@ -58,6 +37,8 @@ let rec replace vn value = function
   | URun x -> URun (x |> replace vn value)
   | UMatch (v, cs) ->
     UMatch (v |> replace vn value, cs |> List.map (fun (x, y) -> if (x |> hasVar vn) then (x, y) else (x, y |> replace vn value)))
+  | UFixMatch (self, cs) when self <> vn ->
+    UFixMatch (self, cs |> List.map (fun (x, y) -> if (x |> hasVar vn) then (x, y) else (x, y |> replace vn value)))
   | UDefer x -> UDefer (x |> replace vn value)
   | x -> x
 
@@ -78,26 +59,13 @@ let getTimeOfTerm t =
           else 0
         | _ -> 0
     | UIf (_, t, e) -> max (g t) (g e)
-    | UMatch (_, cs) ->
+    | UMatch (_, cs)
+    | UFixMatch (_, cs) ->
       cs |> List.map (snd >> g) |> List.max
+    | UFun (_, t)
+    | UFunUnit t -> g t
     | _ -> 0
   in g t
-
-let rec addRun i t =
-  if (i > 0) then
-    let t' = 
-      match t with
-        | UDefer x -> x
-        | x -> URun x
-    in addRun (i - 1) t'
-  else
-    t
-
-let rec delayTermBy i t =
-  if (i > 0) then
-    UDefer t |> delayTermBy (i - 1)
-  else
-    t
 
 let evalWithContext term ctx =
   let uniq = ref 0 in
@@ -107,12 +75,12 @@ let evalWithContext term ctx =
       uniq := newuniq;
       if (ctx |> Map.tryFind na |> Option.isNone && body |> hasVar na |> not) then
         UFun (na, body |> replace arg (UVar na))
-      else UFun (arg, body) |> aconvert
+      else UFun (arg, body |> aconvert)
     | x -> x
   in
   let rec e ctx = function
     | UVar n ->
-      ctx |> Map.tryFind n |> Option.map (e ctx) ?| UVar n
+      ctx |> Map.tryFind n ?| UVar n
     | UTuple xs -> UTuple (xs |> List.map (e ctx))
     | UConstruct ("Succ", [x]) ->
       UApply (UApply (UVar "+", x), ULiteral (LNat 1u)) |> e ctx
@@ -122,9 +90,12 @@ let evalWithContext term ctx =
     | UApply (f, x) ->
       match (f |> e ctx) with
         | UFun (arg, body) ->
-          body |> e (ctx |> Map.add arg x) |> e ctx
+          body |> e (ctx |> Map.add arg (x |> e ctx))
         | UFunUnit body ->
           body |> e ctx
+        | UFixMatch (self, cases) ->
+          let m = UMatch(x, cases) in
+          m |> e (ctx |> Map.add self (UFixMatch (self, cases)))
         | f ->
           let (loot, args) = expandApply (UApply (f, x)) in
           match loot with
@@ -145,21 +116,15 @@ let evalWithContext term ctx =
       match (b |> e ctx) with
         | ULiteral (LBool true) -> t |> e ctx
         | ULiteral (LBool false) -> l |> e ctx
-        | _ -> UIf (b, t, l)
+        | x -> UIf (x, t, l)
     | ULet (x, r, b) ->
       b |> e (ctx |> Map.add x (r |> e ctx))
     | ULetDefer (x, r, b) ->
-      let r' = r |> replaceAll ctx in
+      let r' = r |> e ctx in
       let time = getTimeOfTerm r' in
-      let b' =
-        let b = b |> replaceAll ctx in
-        if (getTimeOfTerm b > 0) then
-          b
-        else
-          b |> e ctx
-      in
+      let b' = b |> replaceAll ctx in
       if (time = 0) then
-        ULet (x, r, b) |> e ctx
+        ULet (x, r', b') |> e ctx
       else
         ULet (x, r' |> addRun time, b') |> delayTermBy time
     | UDefer x ->
@@ -169,9 +134,13 @@ let evalWithContext term ctx =
         if (fvOfTerm v' |> Set.isEmpty) then
           match (pts |> List.choose (fun (p, b) -> matchPattern p v' |> Option.map (fun x -> (b, x))) |> List.tryHead) with
             | Some (body, bindings) -> foldLet body bindings |> e ctx
-            | None -> failwith "match failed"
+            | None -> 
+              printfn "%A" v';
+              failwith "match failed"
         else
-          UMatch (v |> e ctx, pts)
+          UMatch (v', pts |> List.map (fun (x, y) -> (x, y |> replaceAll (ctx |> Map.filter (fun k _ -> fvOfTerm x |> Set.contains k |> not)))))
+    | UFixMatch (self, cs) ->
+      UFixMatch (self, cs |> List.map (fun (x, y) -> (x, y |> e (ctx |> Map.filter (fun k _ -> k <> self && (fvOfTerm x |> Set.contains k |> not))))))
     | URun x ->
       match (x |> e ctx) with
         | UDefer x' -> x' |> e ctx

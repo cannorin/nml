@@ -1,0 +1,46 @@
+let find cond =
+  fixpoint f of
+    h :: t ->
+    if cond h then Some h else f t
+  | _ -> None
+in
+
+let nth =
+  fixpoint next of
+    0 -> (
+      function
+        h :: _ -> Some h
+      | [] -> None
+    )
+  | Succ n ->
+    function
+      _ :: t -> next n t
+    | [] -> None
+in
+
+let map f =
+  fixpoint g of
+    h :: t -> f h :: g t
+  | [] -> []
+in
+
+let filter f =
+  fixpoint g of
+    h :: t ->
+      if f h then
+        h :: g t
+      else
+        g t
+  | [] -> []
+in
+
+let l2 = 
+  [1; 2; 3; 4; 5]
+    |> map ((+) 2)
+    |> filter ((<) 3) 
+in
+
+l2 |> print !;
+l2 |> find ((>) 5) |> print !;
+l2 |> nth 2 |> print
+

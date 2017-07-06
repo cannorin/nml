@@ -15,16 +15,12 @@ let inline scan prompt = editor.Edit(prompt, "")
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
-      | (UApply (UVar "Succ", pred), ULiteral (LNat n))
       | (UConstruct ("Succ", [pred]), ULiteral (LNat n)) when n > 0u ->
         mt pred (ULiteral (LNat (n - 1u)))
       | (UConstruct ("0", []), ULiteral (LNat 0u)) ->
         []
-      | (UConstruct (n, xs), UConstruct (m, ys))
-      | (UApply (UVar n, UTuple xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
+      | (UConstruct (n, xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat
-      | (UApply (UVar n, x), UConstruct (m, _)) when n = m ->
-        mt (UApply (UVar n, UTuple [x])) t
       | (UTuple xs, UTuple ys) when (List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat
       | (ULiteral x, ULiteral y) when x = y ->
@@ -100,6 +96,35 @@ let getTimeOfType ty =
     | x -> (x, i)
   in dig 0 ty
 
+let rec fvOfTerm = function
+  | UApply (l, r) -> 
+    Set.union (fvOfTerm l) (fvOfTerm r)
+  | UDefer x -> fvOfTerm x
+  | UFun (a, b) ->
+    Set.difference (fvOfTerm b) (set [a])
+  | UIf (b, t, e) -> 
+    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
+  | ULet (x, r, b)
+  | ULetDefer (x, r, b) ->
+    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
+  | UTuple xs
+  | UConstruct (_, xs) -> 
+    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
+  | UVar x when x <> "_" -> set [x]
+  | UMatch (v, cs) ->
+    cs 
+      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
+      |> List.concat
+      |> Set.ofList
+      |> Set.union (fvOfTerm v)
+  | UFixMatch (self, cs) ->
+    cs 
+      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
+      |> List.concat
+      |> Set.ofList
+      |> Set.difference (set [self])
+  | _ -> set []
+
 let rec hasSelf name args = function
   | Variant (n, ts, _)
   | TypeOp (n, ts, _) when (n = name && ts = args) -> true
@@ -121,4 +146,21 @@ let rec isInductive vt =
       else
         Some false
     | _ -> Some false
+
+let rec addRun i t =
+  if (i > 0) then
+    let t' = 
+      match t with
+        | UDefer x -> x
+        | x -> URun x
+    in addRun (i - 1) t'
+  else
+    t
+
+let rec delayTermBy i t =
+  if (i > 0) then
+    UDefer t |> delayTermBy (i - 1)
+  else
+    t
+
 

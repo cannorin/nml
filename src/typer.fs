@@ -284,10 +284,12 @@ let rec recon ctx uniq term =
     | UMatch (v, cases) ->
       let (v', tv, newUniq, cstr) = recon ctx uniq v in
       let rec expandCases = function
-        | UOp2 (l, "::", r) -> UApply (UVar "Cons", UTuple [expandCases l; expandCases r])
+        | UOp2 (l, "::", r) -> UConstruct ("Cons", [expandCases l; expandCases r])
         | UList [] -> UConstruct ("Nil", [])
-        | UList xs -> xs |> List.rev |> List.fold (fun l x -> UApply (UVar "Cons", UTuple [expandCases x; l])) (UConstruct ("Nil", []))
-        | UApply (UVar x, y) -> UApply (UVar x, expandCases y)
+        | UList xs -> xs |> List.rev |> List.fold (fun l x -> UConstruct ("Cons", [expandCases x; l])) (UConstruct ("Nil", []))
+        | UApply (UVar x, UTuple ys) when (ctx |> findVariant x (Some ys) |> Option.isSome) ->
+          UConstruct (x, ys |> List.map expandCases)
+        | UApply (UVar x, y) -> UConstruct (x, [expandCases y])
         | UTuple xs -> UTuple (xs |> List.map expandCases)
         | UVar x ->
           match (ctx |> findVariant x (Some [])) with
@@ -304,7 +306,7 @@ let rec recon ctx uniq term =
         let f = 
           cases 
             |> List.map (fun (pat, body) ->
-                if (isValidAsPattern ctx pat |> not) then
+                if (isValidAsPattern pat |> not) then
                   TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
                 else
                   match (ctx |> bindPattern pat a) with
@@ -327,6 +329,26 @@ let rec recon ctx uniq term =
       let cstrs = List.concat [ [ Constraint (tv, a, v') ]; css; cstr; bcstr ] in
       (term', b, u', cstrs)
 
+    | UFixMatch (self, cases) ->
+      let (uvs, uniq) = genUniqs uniq 2 in
+      let (targ, tret) =
+        match uvs with
+          | [a; b] -> (TypeVar a, TypeVar b)
+          | _ -> failwith "impossible_UFixMatch"
+      in
+      let tthis = Fun (targ, tret) in
+
+      let ctx' = ctx |> typerAdd self tthis 
+                     |> typerAdd "x" targ
+      in
+      let (mth, tmth, uniq, cstr1) = recon ctx' uniq (UMatch (UVar "x", cases)) in
+      match mth with
+        | UMatch (_, cases) ->
+          verifyTermination self cases |> ignore;
+          (UFixMatch (self, cases), Fun (targ, tret), uniq, Constraint (tret, tmth, UFixMatch (self, cases)) :: cstr1)
+        | _ ->
+          failwith "impossible_UFixMatch"
+
     | URun x ->
       let (x', tx, newUniq, cstr) = recon ctx uniq x in
       let (tx', ttime) = getTimeOfType tx in
@@ -334,6 +356,47 @@ let rec recon ctx uniq term =
         (URun x', tx' |> delayTypeBy (ttime - 1), newUniq, cstr)
       else
         NotRunnable tx |> TyperFailed |> raise
+
+and verifyTermination self cases =
+  let rec verify dom codom t =
+    let res = 
+      match t with
+        | UApply (UVar f, UVar x) when (f = self) ->
+          codom |> Set.contains x
+        | UApply (UVar f, _) when (f = self) -> false
+        | UMatch (UVar x, cs) when (dom |> Set.contains x) ->
+          cs |> List.forall (fun (pat, bdy) -> bdy |> verify (fvOfTerm pat |> Set.union dom) (fvOfTerm pat |> Set.union codom))
+        | UMatch (x, cs) ->
+          verify dom codom x && cs |> List.forall (snd >> verify dom codom)
+        | UConstruct (_, xs)
+        | UTuple xs
+        | UList xs -> xs |> List.forall (verify dom codom)
+        | UIf (x, t, e) -> [x; t; e] |> List.forall (verify dom codom)
+        | UFun (x, b) ->
+          b |> verify (dom |> Set.remove x) (codom |> Set.remove x)
+        | ULet (x, l, r)
+        | ULetDefer (x, l, r) -> [l; r] |> List.forall (verify (dom |> Set.remove x) (codom |> Set.remove x))
+        | UApply (l, r)
+        | UOp2 (l, _, r) -> [l; r] |> List.forall (verify dom codom)
+        | UVar x -> self <> x
+        | ULiteral _
+        | UExternal _ -> true
+        | UFunUnit x
+        | UDefer x
+        | URun x ->
+          verify dom codom x
+        | UFixMatch (f, cs) ->
+          cs |> List.forall (snd >> verify (dom |> Set.remove f) (codom |> Set.remove f))
+    in
+    if res then
+      res
+    else
+      TermWithMessage ("Recursion is not well-founded. Bad expression: '%s'", t) |> TyperFailed |> raise
+  in cases |> List.forall (fun (ptn, bdy) ->
+      match ptn with
+        | UConstruct _ -> verify (fvOfTerm ptn) (fvOfTerm ptn) bdy
+        | _ -> verify Set.empty Set.empty bdy
+    )
 
 and reconFromPatterns mth ctx uniq =
   let pats =
@@ -344,10 +407,7 @@ and reconFromPatterns mth ctx uniq =
   let (a, uniq) = genUniq uniq in
   let rec gh uq pat =
     match pat with
-      | UVar x when (ctx |> findVariant x None |> Option.isSome) ->
-        gh uq (UApply (UVar x, UTuple []))
-      | UConstruct (x, ys)
-      | UApply (UVar x, UTuple ys) when (ctx |> findVariant x (Some ys) |> Option.isSome) ->
+      | UConstruct (x, ys) ->
         let (name, targs, cts, ctargs, nq) =
           match (ctx |> findVariant x (Some ys)) with
             | Some (Variant (name, targs, cts), ctargs) ->
@@ -373,7 +433,6 @@ and reconFromPatterns mth ctx uniq =
         in
         let vt = Variant (name, targs, cts) |> substAll asgn in
         (fnq, vt)
-      | UApply (UVar x, y) -> gh uq (UApply (UVar x, UTuple [y]))
       | UTuple xs ->
         let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
         (nq, TTuple (ts |> List.rev))
@@ -393,19 +452,17 @@ and reconFromPatterns mth ctx uniq =
   exhaustiveCheck (pats |> List.map fst) rt ctx;
   (rt, newUniq)
 
-and isValidAsPattern ctx = function
+and isValidAsPattern = function
   | ULiteral _
   | UConstruct (_, [])
   | UVar _ -> true
   | UConstruct (_, xs)
-  | UTuple xs -> xs |> List.forall (isValidAsPattern ctx)
-  | UApply (UVar x, _) -> ctx |> findVariant x None |> Option.isSome
+  | UTuple xs -> xs |> List.forall isValidAsPattern
   | _ -> false
 
 and bindPattern pat t ctx =
   let rec bt pat t =
     match (pat, t) with
-      | (UApply (UVar n, UTuple xs), TypeOp (name, ts, _))
       | (UConstruct (n, xs), TypeOp (name, ts, _)) ->
         match (ctx |> findType name) with
           | Some (Variant (name, vts, cts)) ->
@@ -413,14 +470,9 @@ and bindPattern pat t ctx =
             let cts' = cts |> List.map (fun (cn, ct) -> (cn, ct |> List.map (substAll asgn))) in
             bt (UConstruct (n, xs)) (Variant (name, vts, cts'))
           | _ -> failwith "impossible_bindPattern"
-      | (UApply (UVar n, UTuple xs), Variant (_, _, cts))
       | (UConstruct (n, xs), Variant (_, _, cts)) when (cts |> List.exists (fun (m, ts) -> m = n && List.length xs = List.length ts)) ->
         let ts = cts |> List.find (fst >> ((=) n)) |> snd in
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UVar n, Variant (_, _, cts)) when (cts |> List.exists (fst >> ((=) n))) ->
-        bt (UApply (UVar n, UTuple [])) t
-      | (UApply (UVar n, x), Variant (_, _, _)) ->
-        bt (UApply (UVar n, UTuple [x])) t
       | (UTuple xs, TypeOp("*", ts, _)) when (List.length xs = List.length ts) ->
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
       | (UVar "_", _)

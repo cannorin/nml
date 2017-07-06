@@ -1,0 +1,12 @@
+let addOpt o1 o2 =
+  match (o1, o2) with
+  | (Some x, Some y) -> x + y
+  | (Some x, None) -> x
+  | (None, Some x) -> x
+  | _ -> 0
+in
+
+addOpt (Some 3) (Some 2) |> print !;
+addOpt None (Some 1) |> print !;
+addOpt None None |> print
+

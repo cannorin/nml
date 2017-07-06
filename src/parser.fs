@@ -16,7 +16,7 @@ let syn x = pstring x |> ws
 let between s1 s2 p = syn s1 >>. p .>> syn s2
 let listing sep x =
   sepBy1 x sep
-let reserved = set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; "true"; "false"; "run"; "if"; "then"; "else"; "type"; "match"; "with";  ]
+let reserved = set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; "true"; "false"; "run"; "if"; "then"; "else"; "type"; "variant"; "inductive"; "match"; "with"; "function"; "fixpoint"; "of" ]
 let identifierString = many1Satisfy (List.concat [['a'..'z']; ['A'..'Z']; ['_']; ['0'..'9']] |> isAnyOf)
 let identifier : Parser<string, unit> =
   let expectedIdentifier = expected "identifier"
@@ -28,7 +28,7 @@ let identifier : Parser<string, unit> =
       stream.BacktrackTo(state)
       Reply(Error, expectedIdentifier)
 
-let op_chars = "+-*/<>%&|^~=!?:;.".ToCharArray() |> Set.ofArray
+let op_chars = "+-*/<>%&|^~=!?:;".ToCharArray() |> Set.ofArray
 let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>" ]
 
 let isSymbolicOperatorChar = isAnyOf op_chars
@@ -43,6 +43,9 @@ opp.OperatorConflictErrorFormatter <-
                       (op1.String + afterString1) pos1
     in messageError msg
 
+let op_app = InfixOperator (" ", manySatisfy (isNoneOf op_chars) .>> spaces, 1000, Associativity.Left, (), fun _ l r -> UApply (l, r)) in
+opp.AddOperator(op_app);
+  
 let addOp2Ext prefix precedence associativity =
   let op = InfixOperator (prefix, 
                           manySatisfy (isAnyOf op_chars) .>> spaces,
@@ -163,7 +166,13 @@ let expr_defer = syn "<(" >>. term .>> syn ")>" |>> UDefer
 
 let expr_if = tuple3 (syn "if" >>. term) (syn "then" >>. term) (syn "else" >>. term) |>> UIf
 
-let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. sepBy1 (tuple2 (term .>> syn "->") term) (syn "|")) |>> UMatch
+let matchpatterns = (syn "|" <|> syn "") >>. (sepBy1 (tuple2 (term .>> syn "->") term) (syn "|"))
+
+let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. matchpatterns) |>> UMatch
+
+let expr_function = (syn "function" >>. matchpatterns) |>> (fun cases -> UFun ("x", UMatch (UVar "x", cases)))
+
+let expr_fixpoint = tuple2 (syn "fixpoint" >>. ws name) (syn "of" >>. matchpatterns) |>> UFixMatch
 
 let expr_apply, eaRef = createParserForwardedToRef<UntypedTerm, unit>()
 
@@ -173,10 +182,12 @@ let not_left_recursive =
     literal_bool
     literal_unit
     attempt variable
-    expr_lambda
     expr_tuple
     expr_list
     expr_letdefer
+    attempt expr_function
+    expr_fixpoint
+    expr_lambda
     expr_let
     expr_defer
     expr_if
@@ -192,8 +203,15 @@ do eaRef := tuple2 not_left_recursive (sepEndBy1 not_left_recursive spaces) |>> 
   )
 
 do termRef := choice [
-    attempt expr_apply
-    opp.ExpressionParser
+    attempt expr_letdefer
+    attempt expr_function
+    attempt expr_fixpoint
+    attempt expr_lambda
+    attempt expr_let
+    attempt expr_if
+    attempt expr_match
+    attempt opp.ExpressionParser
+    expr_apply
   ]
 
 

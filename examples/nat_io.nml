@@ -1,0 +1,4 @@
+let! x = readNat () in
+let! y = readNat () in
+x + y |> print
+
