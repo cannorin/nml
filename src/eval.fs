@@ -40,6 +40,7 @@ let toEvalTerm t =
       EMatch (x |> tot stack, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> List.contains) then "" else n)) b)))
     | UExternal (f, t) ->
       EExt (f, t |> expandFun |> fst |> List.length, [])
+  in tot [] t
 
 let matchPattern pat t =
   let rec mt pat t =
@@ -93,3 +94,4 @@ let evalWithContext map t =
 
 let eval t = evalWithContext Map.empty t
 
+()
