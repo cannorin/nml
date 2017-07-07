@@ -5,6 +5,7 @@ let nested_fixp =
 in
 
 nested_fixp 4 |> print !;
+pause () !;
 
 let range =
   fixpoint f of

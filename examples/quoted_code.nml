@@ -1,7 +1,7 @@
 let stepRun code =
-  let! x = code in
-  print x !;
-  x
+  print code !;
+  pause () !;
+  code
 in
 
 let! one = stepRun <( 1 )> in
@@ -10,5 +10,6 @@ let! three = stepRun <( one + 2 )> in
 
 let! four = stepRun <( one + three )> in
 
+one + three + four |> print !;
 one + three + four
 

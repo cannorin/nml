@@ -28,4 +28,3 @@ myList |> isEmpty |> not |> print !;
 myList |> (not << isEmpty) |> print !;
 
 ()
-

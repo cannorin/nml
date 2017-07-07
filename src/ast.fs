@@ -86,6 +86,17 @@ let inline handle_op s =
   else
     "(" + s + ")"
 
+type EvalTerm =
+  | ELit of Literal
+  | EBound of int
+  | EFree of string
+  | EAbs of EvalTerm * string option
+  | EFix of EvalTerm * string option
+  | EApp of EvalTerm * EvalTerm
+  | ECons of string * EvalTerm list
+  | EMatch of EvalTerm * (EvalTerm * EvalTerm) list
+  | EExtApply of NameCompared<EvalTerm list -> EvalTerm> * int * EvalTerm list
+
 type UntypedTerm =
   | UVar of string
   | ULiteral of Literal
@@ -101,7 +112,7 @@ type UntypedTerm =
   | UDefer of UntypedTerm
   | ULetDefer of string * UntypedTerm * UntypedTerm
   // | UModuleVal of string * string
-  | UExternal of NameCompared<UntypedTerm list -> UntypedTerm> * Type
+  | UExternal of NameCompared<EvalTerm list -> EvalTerm> * Type
   | UOp2 of UntypedTerm * string * UntypedTerm
   | UMatch of UntypedTerm * (UntypedTerm * UntypedTerm) list
   | URun of UntypedTerm

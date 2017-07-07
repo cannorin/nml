@@ -16,7 +16,7 @@ let syn x = pstring x |> ws
 let between s1 s2 p = syn s1 >>. p .>> syn s2
 let listing sep x =
   sepBy1 x sep
-let reserved = set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; "true"; "false"; "run"; "if"; "then"; "else"; "type"; "variant"; "inductive"; "match"; "with"; "function"; "fixpoint"; "of" ]
+let reserved = set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; "true"; "false"; "run"; "if"; "then"; "else"; "type"; "variant"; "inductive"; "match"; "with"; "function"; "fixpoint"; "of"; "begin"; "end" ]
 let identifierString = many1Satisfy (List.concat [['a'..'z']; ['A'..'Z']; ['_']; ['0'..'9']] |> isAnyOf)
 let identifier : Parser<string, unit> =
   let expectedIdentifier = expected "identifier"
@@ -203,6 +203,7 @@ do eaRef := tuple2 not_left_recursive (sepEndBy1 not_left_recursive spaces) |>> 
   )
 
 do termRef := choice [
+    syn "begin" >>. term .>> syn "end"
     attempt expr_letdefer
     attempt expr_function
     attempt expr_fixpoint

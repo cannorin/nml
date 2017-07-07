@@ -34,11 +34,23 @@ let builtinTypes = [
 
 let impossible = ULiteral LUnit
 
-let DefFun name t f =
-  TermContext (name, t, ExternalFun name t f)
+let DefFun name targs tret f =
+  let (tret', timeret) = getTimeOfType tret in
+  if timeret > 0 then
+    let ext = ExternalFun name (foldFun targs tret') f in
+    let (vs, _) = targs |> List.length |> genUniqs 0 in
+    TermContext (name, foldFun targs tret, ext |> foldApply (vs |> List.map UVar) |> addRun timeret |> delayTermBy timeret |> List.foldBack (fun x b -> UFun(x, b)) vs)
+  else
+    TermContext (name, foldFun targs tret, ExternalFun name (foldFun targs tret) f)
 
-let DefPolyFun name tas t f =
-  TermContext (name, Scheme (set tas, t), ExternalFun name (Scheme (set tas, t)) f)
+let DefPolyFun name tas targs tret f =
+  let (tret', timeret) = getTimeOfType tret in
+  if timeret > 0 then
+    let ext = ExternalFun name (Scheme (set tas, foldFun targs tret')) f in
+    let (vs, _) = targs |> List.length |> genUniqs 0 in
+    TermContext (name, Scheme (set tas, foldFun targs tret), ext |> foldApply (vs |> List.map UVar) |> addRun timeret |> delayTermBy timeret |> List.foldBack (fun x b -> UFun(x, b)) vs)
+  else
+    TermContext (name, Scheme (set tas, foldFun targs tret), ExternalFun name (Scheme (set tas, foldFun targs tret)) f)
 
 let RawTerm name s =
   try
@@ -71,24 +83,24 @@ let addTerm name term ctx =
 
 let builtinTerms = [
   RawTerm "id" "fun x -> x";
-  DefFun "exit" (Fun(Nat, Deferred Unit)) (function
+  DefFun "exit" [Nat] (Deferred Unit) (function
     | ULiteral (LNat x) :: _ -> Environment.Exit(int32 x); ULiteral LUnit
     | _ -> impossible
   );
-  DefFun "+" (foldFun [Nat; Nat] Nat) (function
+  DefFun "+" [Nat; Nat] Nat (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> LNat (a + b) |> ULiteral
     | _ -> impossible
   );
-  DefFun "*" (foldFun [Nat; Nat] Nat) (function
+  DefFun "*" [Nat; Nat] Nat (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> LNat (a * b) |> ULiteral
     | _ -> impossible
   );
-  DefFun "%" (foldFun [Nat; Nat] Nat) (function
+  DefFun "%" [Nat; Nat] Nat (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> LNat (a % b) |> ULiteral
     | _ -> impossible
   );
   RawTerm "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
-  DefFun "-?" (foldFun [Nat; Nat] (TOption Nat)) (function
+  DefFun "-?" [Nat; Nat] (TOption Nat) (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ ->
       if (a > b) then
         UConstruct ("Some", [LNat (a - b) |> ULiteral])
@@ -96,53 +108,51 @@ let builtinTerms = [
         UConstruct ("None", [])
     | _ -> impossible
   );
-  DefPolyFun "=" ["a"] (foldFun [TypeVar "a"; TypeVar "a"] Bool) (function
+  DefPolyFun "=" ["a"] [TypeVar "a"; TypeVar "a"] Bool (function
     | a :: b :: _ -> (a = b) |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefPolyFun "<>" ["a"] (foldFun [TypeVar "a"; TypeVar "a"] Bool) (function
+  DefPolyFun "<>" ["a"] [TypeVar "a"; TypeVar "a"] Bool (function
     | a :: b :: _ -> (a <> b) |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefFun "not" (Fun (Bool, Bool)) (function
+  DefFun "not" [Bool] Bool (function
     | ULiteral (LBool b) :: _ -> not b |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefFun ">" (foldFun [Nat; Nat] Bool) (function
+  DefFun ">" [Nat; Nat] Bool (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> (a > b) |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefFun "<" (foldFun [Nat; Nat] Bool) (function
+  DefFun "<" [Nat; Nat] Bool (function
     | ULiteral (LNat a) :: ULiteral (LNat b) :: _ -> (a < b) |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefFun "&&" (foldFun [Bool; Bool] Bool) (function
+  DefFun "&&" [Bool; Bool] Bool (function
     | ULiteral (LBool a) :: ULiteral (LBool b) :: _ -> (a && b) |> LBool |> ULiteral
     | _ -> impossible
   );
-  DefFun "||" (foldFun [Bool; Bool] Bool) (function
+  DefFun "||" [Bool; Bool] Bool (function
     | ULiteral (LBool a) :: ULiteral (LBool b) :: _ -> (a || b) |> LBool |> ULiteral
     | _ -> impossible
   );
   RawTerm "ignore" "fun _ -> ()";
-  DefFun "readNat" (Fun(Unit, Deferred Nat)) (fun _ ->
+  DefFun "readNat" [Unit] (Deferred Nat) (fun _ ->
       scan "readNat> " 
         |> uint32
-        |> LNat |> ULiteral |> UDefer 
+        |> LNat |> ULiteral
   );
-  DefPolyFun "print" ["a"] (Fun (TypeVar "a", Deferred Unit)) (function
+  DefPolyFun "print" ["a"] [TypeVar "a"] (Deferred Unit) (function
     | x :: _ ->
       printfn "print> %s" (to_s x);
-      ULiteral LUnit |> UDefer
+      ULiteral LUnit
     | _ -> impossible
   );
-  DefPolyFun "car" ["a"; "b"] (Fun(TTuple [TypeVar "a"; TypeVar "b"], TypeVar "a")) (function
-    | UTuple [a; b] :: _ -> a
-    | _ -> impossible
-  );
-  DefPolyFun "cdr" ["a"; "b"] (Fun(TTuple [TypeVar "a"; TypeVar "b"], TypeVar "b")) (function
-    | UTuple [a; b] :: _ -> b
-    | _ -> impossible
+  DefFun "pause" [Unit] (Deferred Unit) (function
+    | _ ->
+      printf "pause> press enter to continue ..";
+      Console.ReadLine () |> ignore;
+      ULiteral LUnit
   );
   RawTerm "defaultArg" "fun o d -> match o with Some x -> x | None -> d";
   RawTerm "|>" "fun x f -> f x";
