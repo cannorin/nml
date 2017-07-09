@@ -4,11 +4,12 @@ open FParsec
 open nml.Ast
 open nml.Typer
 open nml.Helper
+open nml.UniversalContext
 open FSharp.Collections
 
 exception ParserFailed of string
 
-let term, termRef = createParserForwardedToRef<UntypedTerm, unit>()
+let term, termRef = createParserForwardedToRef<ParsedTerm, unit>()
 //let typ, typRef = createParserForwardedToRef<Type, unit>()
 
 let ws x = x .>> spaces
@@ -34,7 +35,7 @@ let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>" ]
 let isSymbolicOperatorChar = isAnyOf op_chars
 //let remainingOpChars_ws = manySatisfy isSymbolicOperatorChar .>> spaces
 
-let opp = new OperatorPrecedenceParser<UntypedTerm, string, unit>()
+let opp = new OperatorPrecedenceParser<ParsedTerm, string, unit>()
 
 opp.OperatorConflictErrorFormatter <-
   fun (pos1, op1, afterString1) (pos2, op2, afterString2) ->
@@ -43,7 +44,7 @@ opp.OperatorConflictErrorFormatter <-
                       (op1.String + afterString1) pos1
     in messageError msg
 
-let op_app = InfixOperator (" ", manySatisfy (isNoneOf op_chars) .>> spaces, 1000, Associativity.Left, (), fun _ l r -> UApply (l, r)) in
+let op_app = InfixOperator (" ", manySatisfy (isNoneOf op_chars) .>> spaces, 1000, Associativity.Left, (), fun _ l r -> PTmApply (l, r)) in
 opp.AddOperator(op_app);
   
 let addOp2Ext prefix precedence associativity =
@@ -52,7 +53,7 @@ let addOp2Ext prefix precedence associativity =
                           precedence, 
                           associativity, 
                           (),
-                          fun remOpChars expr1 expr2 -> UOp2 (expr1, prefix + remOpChars, expr2)
+                          fun remOpChars expr1 expr2 -> PTmOp2 (expr1, prefix + remOpChars, expr2)
                          )
   in
   opp.AddOperator(op)
@@ -122,59 +123,59 @@ let type_app = sepEndBy1 typ spaces1 |>> (fun ts ->
 
 let unitparam = syn "()" |>> (fun x -> [x])
 
-let variable = ws (name <|> opvar) |>> UVar
-let literal_nat = ws puint32 <?> "Nat" |>> (LNat >> ULiteral)
-let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> ULiteral)
-let literal_unit = syn "()" >>% ULiteral LUnit
+let variable = ws (name <|> opvar) |>> PTmVar
+let literal_nat = ws puint32 <?> "Nat" |>> (LNat >> PTmLiteral)
+let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> PTmLiteral)
+let literal_unit = syn "()" >>% PTmLiteral LUnit
 
 let inline (<+>) a b =
   tuple2 a b |>> (fun (x, y) -> List.append [x] y)
 
-let expr_tuple = (term |> listing (syn ",")) |> between "(" ")" |>> (fun xs -> if (List.length xs = 1) then xs.[0] else UTuple xs)
+let expr_tuple = (term |> listing (syn ",")) |> between "(" ")" |>> (fun xs -> if (List.length xs = 1) then xs.[0] else PTmTuple xs)
 
 let makeList t = 
   let rec m = function
-    | [UOp2 (l, ";", r)] -> l :: m [r]
+    | [PTmOp2 (l, ";", r)] -> l :: m [r]
     | x -> x
-  in m t |> UList
+  in m t |> PTmList
 
 let expr_list = (sepEndBy term (syn ";")) |> between "[" "]" |>> makeList
 
 let makeFun (args, body) =
   match args with
-    | "()" :: [] -> UFunUnit body
-    | _ -> body |> List.foldBack (fun x t -> UFun(x, t)) args
+    | "()" :: [] -> PTmFunUnit body
+    | _ -> body |> List.foldBack (fun x t -> PTmFun(x, t)) args
 let expr_lambda = tuple2 (syn "fun" >>. (unitparam <|> sepEndBy1 name spaces1) .>> syn "->") term |>> makeFun
 
 let makeLet (vars, value, expr) =
   assert (vars <> []);
   let (h :: t) = vars in
   if (List.length t = 0) then
-    ULet (h, value, expr)
+    PTmLet (h, value, expr)
   else
-    ULet (h, makeFun (t, value), expr)
+    PTmLet (h, makeFun (t, value), expr)
   
 let toDefer = function
-  | ULet(n, r, b) -> ULetDefer(n, r, b)
-  | x -> UDefer x
+  | PTmLet(n, r, b) -> PTmLetDefer(n, r, b)
+  | x -> PTmDefer x
 
 let expr_let = tuple3 (syn "let" >>. (ws (name <|> opvar) <+> (unitparam <|> sepEndBy name spaces1)) .>> syn "=") (term .>> syn "in") term |>>  makeLet
 
 let expr_letdefer = tuple3 (syn "let!" >>. (ws name <+> (unitparam <|> sepEndBy name spaces1)) .>> syn "=") (term .>> syn "in") term |>>  (makeLet >> toDefer)
 
-let expr_defer = syn "<(" >>. term .>> syn ")>" |>> UDefer
+let expr_defer = syn "<(" >>. term .>> syn ")>" |>> PTmDefer
 
-let expr_if = tuple3 (syn "if" >>. term) (syn "then" >>. term) (syn "else" >>. term) |>> UIf
+let expr_if = tuple3 (syn "if" >>. term) (syn "then" >>. term) (syn "else" >>. term) |>> PTmIf
 
 let matchpatterns = (syn "|" <|> syn "") >>. (sepBy1 (tuple2 (term .>> syn "->") term) (syn "|"))
 
-let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. matchpatterns) |>> UMatch
+let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. matchpatterns) |>> PTmMatch
 
-let expr_function = (syn "function" >>. matchpatterns) |>> (fun cases -> UFun ("x", UMatch (UVar "x", cases)))
+let expr_function = (syn "function" >>. matchpatterns) |>> (fun cases -> PTmFun ("x", PTmMatch (PTmVar "x", cases)))
 
-let expr_fixpoint = tuple2 (syn "fixpoint" >>. ws name) (syn "of" >>. matchpatterns) |>> UFixMatch
+let expr_fixpoint = tuple2 (syn "fixpoint" >>. ws name) (syn "of" >>. matchpatterns) |>> PTmFixMatch
 
-let expr_apply, eaRef = createParserForwardedToRef<UntypedTerm, unit>()
+let expr_apply, eaRef = createParserForwardedToRef<ParsedTerm, unit>()
 
 let not_left_recursive = 
   choice [
@@ -199,7 +200,7 @@ do eaRef := tuple2 not_left_recursive (sepEndBy1 not_left_recursive spaces) |>> 
     if (List.isEmpty ys) then 
       x
     else
-      List.fold (fun t i -> UApply(t, i)) x ys
+      List.fold (fun t i -> PTmApply(t, i)) x ys
   )
 
 do termRef := choice [
@@ -225,3 +226,76 @@ let parseTerm text =
     | Success (r, _, _) -> r
     | Failure (msg, _, _) -> ParserFailed msg |> raise
 ()
+
+let rec fvOfTerm = function
+  | PTmOp2 (l, _, r)
+  | PTmApply (l, r) -> 
+    Set.union (fvOfTerm l) (fvOfTerm r)
+  | PTmDefer x -> fvOfTerm x
+  | PTmFun (a, b) ->
+    Set.difference (fvOfTerm b) (set [a])
+  | PTmIf (b, t, e) -> 
+    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
+  | PTmLet (x, r, b)
+  | PTmLetDefer (x, r, b) ->
+    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
+  | PTmTuple xs
+  | PTmList  xs -> 
+    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
+  | PTmVar x when x <> "_" -> set [x]
+  | PTmMatch (v, cs) ->
+    cs 
+      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
+      |> List.concat
+      |> Set.ofList
+      |> Set.union (fvOfTerm v)
+  | PTmFixMatch (self, cs) ->
+    cs 
+      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
+      |> List.concat
+      |> Set.ofList
+      |> Set.difference (set [self])
+  | _ -> set []
+
+let toUntypedTerm ctx pt =
+  let rec tot stack = function
+    | PTmVar x ->
+      // constructor without arguments
+      if (ctx |> findConstructor x (Some []) |> Option.isSome) then
+        UTmConstruct (x, [])
+      else
+        match (stack |> List.tryFindIndex ((=) x)) with
+          | Some i -> UTmBoundVar i
+          | None -> UTmFreeVar x
+    | PTmLiteral l -> UTmLiteral l
+    | PTmTuple xs -> UTmTuple (xs |> List.map (tot stack))
+    | PTmList [] -> UTmConstruct ("Nil", [])
+    | PTmList xs -> xs |> List.rev |> List.fold (fun l x -> UTmConstruct ("Cons", [tot stack x; l])) (UTmConstruct ("Nil", []))
+    | PTmFun (arg, body) -> UTmFun (body |> tot (arg :: stack))
+    | PTmFunUnit body -> UTmFun (body |> tot ("" :: stack))
+    // immediate constructor handling
+    | PTmApply (PTmVar x, PTmTuple xs) when (ctx |> findConstructor x (Some xs) |> Option.isSome) ->
+      UTmConstruct (x, xs |> List.map (tot stack))
+    // immediate constructor handling
+    | PTmApply (PTmVar x, y) when (ctx |> findConstructor x (Some [y]) |> Option.isSome)  ->
+      UTmConstruct (x, [y |> tot stack])
+    | PTmApply (l, r) ->
+      match (l |> tot stack) with
+        | UTmApply (l', r') -> UTmApply (l', List.append r' [tot stack r])
+        | x -> UTmApply (x, [tot stack r])
+    | PTmDefer x -> UTmDefer (tot stack x)
+    | PTmRun x -> UTmRun (tot stack x)
+    | PTmLet (x, r, b) ->
+      UTmLet (x, r |> tot stack, b |> tot stack)
+    | PTmLetDefer (x, r, b) ->
+      UTmLetDefer (x, r |> tot stack, b |> tot stack)
+      // UTmDefer (PTmLet (x, PTmRun r, b) |> tot stack)
+    | PTmOp2 (l, op, r) ->
+      PTmApply (PTmApply (PTmVar op, l), r) |> tot stack
+    | PTmIf (x, t, e) ->
+      PTmMatch (x, [ (PTmLiteral (LBool true), t); (PTmLiteral (LBool false), e) ]) |> tot stack
+    | PTmMatch (x, cs) ->
+      UTmMatch (x |> tot stack, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
+    | PTmFixMatch (n, cs) ->
+      UTmFixMatch (n, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
+  in tot [] pt

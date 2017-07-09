@@ -1,31 +1,21 @@
 module nml.Helper
 
 open nml.Ast
-open Mono.Terminal
-
-let inline (?|) x y = defaultArg x y
-let inline cprintfn color p x =
-  System.Console.ForegroundColor <- color;
-  printfn p x;
-  System.Console.ResetColor ()
-
-let editor = new LineEditor ("nml", 300)
-let inline scan prompt = editor.Edit(prompt, "")
 
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
-      | (UConstruct ("Succ", [pred]), ULiteral (LNat n)) when n > 0u ->
-        mt pred (ULiteral (LNat (n - 1u)))
-      | (UConstruct ("0", []), ULiteral (LNat 0u)) ->
+      | (UTmConstruct ("Succ", [pred]), UTmLiteral (LNat n)) when n > 0u ->
+        mt pred (UTmLiteral (LNat (n - 1u)))
+      | (UTmConstruct ("0", []), UTmLiteral (LNat 0u)) ->
         []
-      | (UConstruct (n, xs), UConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
+      | (UTmTuple xs, UTmTuple ys) ->
         ys |> List.map2 mt xs |> List.concat
-      | (UTuple xs, UTuple ys) when (List.length xs = List.length ys) ->
+      | (UTmConstruct (n, xs), UTmConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat
-      | (ULiteral x, ULiteral y) when x = y ->
+      | (UTmLiteral x, UTmLiteral y) when x = y ->
         []
-      | (UVar x, y) -> [(x, y)]
+      | (UTmFreeVar x, y) -> [(x, y)]
       | _ -> failwith "matchfailed"
   in 
   try
@@ -33,31 +23,26 @@ let matchPattern pat t =
   with
     | _ -> None
 
-let genUniq ng =
-  let a = ng % 26 in
-  let p = ng / 26 in
-  (new string [| for i in 0..p do yield [|'a'..'z'|].[a] |], ng + 1)
-
 // (((f a) b) c) --> (f, [a; b; c])
 let rec expandApply = function
-  | UApply (UApply (a, b), r) ->
-    let (loot, args) = UApply (a, b) |> expandApply in
+  | UTmApply (UTmApply (a, b), r) ->
+    let (loot, args) = UTmApply (a, b) |> expandApply in
     (loot, List.concat [args; [r];])
-  | UApply (f, x) -> (f, [x])
+  | UTmApply (f, x) -> (f, [x])
   | x -> (x, [])
 
 // [a; b; c] f --> (((f a) b) c)
 let rec foldApply args f =
   match args with
     | x :: rest ->
-      UApply(f, x) |> foldApply rest
+      UTmApply(f, x) |> foldApply rest
     | [] -> f
 
 // [("a", A); ("b", B)] body --> let a = A in let b = B in body
 let rec foldLet body binds =
   match binds with
     | (name, value) :: rest ->
-      ULet (name, value, foldLet body rest)
+      UTmLet (name, value, foldLet body rest)
     | [] -> body
 
 // a -> b -> c -> d --> ([a; b; c], d)
@@ -96,35 +81,6 @@ let getTimeOfType ty =
     | x -> (x, i)
   in dig 0 ty
 
-let rec fvOfTerm = function
-  | UApply (l, r) -> 
-    Set.union (fvOfTerm l) (fvOfTerm r)
-  | UDefer x -> fvOfTerm x
-  | UFun (a, b) ->
-    Set.difference (fvOfTerm b) (set [a])
-  | UIf (b, t, e) -> 
-    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
-  | ULet (x, r, b)
-  | ULetDefer (x, r, b) ->
-    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | UTuple xs
-  | UConstruct (_, xs) -> 
-    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
-  | UVar x when x <> "_" -> set [x]
-  | UMatch (v, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.union (fvOfTerm v)
-  | UFixMatch (self, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.difference (set [self])
-  | _ -> set []
-
 let rec hasSelf name args = function
   | Variant (n, ts, _)
   | TypeOp (n, ts, _) when (n = name && ts = args) -> true
@@ -147,19 +103,39 @@ let rec isInductive vt =
         Some false
     | _ -> Some false
 
+let rec fvOfTerm = function
+  | UTmFreeVar x -> set [x]
+  | UTmApply (l, rs) ->
+    l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
+  | UTmTuple xs
+  | UTmConstruct (_, xs) ->
+    xs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
+  | UTmFun x
+  | UTmDefer x
+  | UTmRun x -> fvOfTerm x
+  | UTmLet (x, v, b) -> Set.union (fvOfTerm v) (fvOfTerm b) |> Set.difference (set [x])
+  | UTmMatch (x, cs) ->
+    cs |> List.map (fun (pt, bd) -> Set.difference (fvOfTerm pt) (fvOfTerm bd) |> Set.toList)
+       |> List.concat
+       |> Set.ofList
+       |> Set.union (fvOfTerm x)
+  | UTmFixMatch (n, cs) ->
+    UTmMatch (UTmLiteral LUnit, cs) |> fvOfTerm |> Set.difference (set [n])
+  | _ -> set []
+
 let rec addRun i t =
   if (i > 0) then
     let t' = 
       match t with
-        | UDefer x -> x
-        | x -> URun x
+        | UTmDefer x -> x
+        | x -> UTmRun x
     in addRun (i - 1) t'
   else
     t
 
 let rec delayTermBy i t =
   if (i > 0) then
-    UDefer t |> delayTermBy (i - 1)
+    UTmDefer t |> delayTermBy (i - 1)
   else
     t
 

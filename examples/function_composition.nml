@@ -25,6 +25,5 @@ let isEmpty = function [] -> true | _ -> false in
 
 myList |> isEmpty |> not |> print !;
 
-myList |> (not << isEmpty) |> print !;
+myList |> (not << isEmpty) |> print
 
-()

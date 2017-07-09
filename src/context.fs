@@ -30,7 +30,7 @@ let printContext ctx =
 let findType name ctx =
   ctx |> List.choose (function | TypeContext (Variant (vs, ts, cts)) when vs = name -> Variant (vs, ts, cts) |> Some | _ -> None) |> List.tryHead
 
-let findVariant name args ctx =
+let findConstructor<'a> name (args : 'a list option) ctx =
   let al = args |> Option.map List.length in
   ctx 
     |> List.choose (function 
@@ -73,6 +73,6 @@ let findModule mdfrs ctx =
 *)
 
 let typerAdd name t ctx =
-  TermContext (name, t, UVar name) :: (ctx |> List.filter (function | TermContext (s, _, _) -> s <> name | _ -> true ))
+  TermContext (name, t, UTmFreeVar name) :: (ctx |> List.filter (function | TermContext (s, _, _) -> s <> name | _ -> true ))
 
 

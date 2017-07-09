@@ -11,6 +11,31 @@ open Microsoft.FSharp.Collections
 open System
 open System.IO
 
+let tryRun ctx code quiet =
+  try
+    let e = parseTerm code in
+    let e' = e |> toUntypedTerm ctx in
+    let (e'', te) = inferWithContext ctx e' in
+    cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
+    let rec loop t i =
+      let t' = t |> eval (ctx |> toEvalContext) in
+      if (not quiet) then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t');
+      match (t' |> next (ctx |> toEvalContext)) with
+        | Reducible t'' -> loop t'' (i + 1)
+        | Halted -> if quiet then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t') else ()
+    in loop e'' 0
+  with
+    | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
+    | TyperFailed (UnifyFailed (a, b, ut)) ->
+      printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
+    | TyperFailed (UnknownVar (n, ctx)) ->
+      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
+    | TyperFailed (NotMatchable (l, t, r)) ->
+      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
+    | TyperFailed (TermWithMessage (f, t)) ->
+      sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
+    | e -> printfn "NATIVE ERROR: %s" e.Message
+
 let rec loop ctx inc =
   let i =
     match inc with
@@ -32,62 +57,18 @@ let rec loop ctx inc =
     printfn "";
     loop ctx None
   else
-    try
-      let e = parseTerm i in
-      let (e', te) = inferWithContext ctx e in
-      cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
-      cprintfn ConsoleColor.DarkGray "eval: %s" (to_s e')
-      let t = evalWithContext e' (ctx |> toEvalContext) in
-      let rec l i = function
-        | URun t ->
-          cprintfn ConsoleColor.DarkGray "----> %s" (to_s t);
-          evalWithContext (URun t) (ctx |> toEvalContext) |> l (i + 1)
-        | t ->
-          t |> to_s |> cprintfn ConsoleColor.DarkGray "----> %s"
-      in l 0 t;
-    with
-      | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
-      | TyperFailed (UnifyFailed (a, b, ut)) ->
-        printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-      | TyperFailed (UnknownVar (n, ctx)) ->
-        printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
-      | TyperFailed (NotMatchable (l, t, r)) ->
-        printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-      | TyperFailed (TermWithMessage (f, t)) ->
-        sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
-      | e -> printfn "RUNTIME ERROR: %s" e.Message
-    printfn "";
-    loop ctx None
+    tryRun ctx i false
+  printfn "";
+  loop ctx None
 
 [<EntryPoint>]
 let main argv =
- match (argv |> Array.toList) with
+  match (argv |> Array.toList) with
+    | "--quiet" :: filename :: _
     | filename :: _ when File.Exists filename ->
       let code = File.ReadAllText filename in
       let ctx = defaultContext in
-      try
-        let e = parseTerm code in
-        let (e', te) = inferWithContext ctx e in
-        cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
-        let t = evalWithContext e' (ctx |> toEvalContext) in
-        let rec l i = function
-          | URun t ->
-            cprintfn ConsoleColor.DarkGray "----> %s" (to_s t);
-            evalWithContext (URun t) (ctx |> toEvalContext) |> l (i + 1)
-          | t ->
-            t |> to_s |> cprintfn ConsoleColor.DarkGray "----> %s"
-        in l 0 t
-      with
-        | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
-        | TyperFailed (UnifyFailed (a, b, ut)) ->
-          printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-        | TyperFailed (UnknownVar (n, ctx)) ->
-          printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
-        | TyperFailed (NotMatchable (l, t, r)) ->
-          printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-        | TyperFailed (TermWithMessage (f, t)) ->
-          sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
-        | e -> printfn "RUNTIME ERROR: %s" e.Message
+      tryRun ctx code (argv.[0] = "--quiet")
     | [] -> 
       printfn "nml REPL ver.???";
       printfn "";
@@ -107,6 +88,5 @@ let main argv =
       loop defaultContext None
     | filename :: _ -> failwith "file doesn't exist"
     | _ -> ()
-  ;
   0
 

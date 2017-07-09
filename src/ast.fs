@@ -86,71 +86,72 @@ let inline handle_op s =
   else
     "(" + s + ")"
 
-type EvalTerm =
-  | ELit of Literal
-  | EBound of int
-  | EFree of string
-  | EAbs of EvalTerm * string option
-  | EFix of EvalTerm * string option
-  | EApp of EvalTerm * EvalTerm
-  | ECons of string * EvalTerm list
-  | EMatch of EvalTerm * (EvalTerm * EvalTerm) list
-  | EExtApply of NameCompared<EvalTerm list -> EvalTerm> * int * EvalTerm list
-
 type UntypedTerm =
-  | UVar of string
-  | ULiteral of Literal
-  | UTuple of UntypedTerm list
-  | UList of UntypedTerm list
-  | UFun of string  * UntypedTerm
-  | UFunUnit of UntypedTerm
-  | UApply of UntypedTerm * UntypedTerm
-  | UConstruct of string * UntypedTerm list
-  | UIf of UntypedTerm * UntypedTerm * UntypedTerm
-  | ULet of string * UntypedTerm * UntypedTerm
-  | UFixMatch of string * (UntypedTerm * UntypedTerm) list
-  | UDefer of UntypedTerm
-  | ULetDefer of string * UntypedTerm * UntypedTerm
-  // | UModuleVal of string * string
-  | UExternal of NameCompared<EvalTerm list -> EvalTerm> * Type
-  | UOp2 of UntypedTerm * string * UntypedTerm
-  | UMatch of UntypedTerm * (UntypedTerm * UntypedTerm) list
-  | URun of UntypedTerm
+  | UTmLiteral of Literal
+  | UTmBoundVar of int
+  | UTmFun of UntypedTerm
+  | UTmFreeVar of string
+  | UTmLet of string * UntypedTerm * UntypedTerm
+  | UTmLetDefer of string * UntypedTerm * UntypedTerm
+  | UTmConstruct of string * UntypedTerm list
+  | UTmTuple of UntypedTerm list
+  | UTmApply of UntypedTerm * UntypedTerm list
+  | UTmMatch of UntypedTerm * (UntypedTerm * UntypedTerm) list
+  | UTmFixMatch of string * (UntypedTerm * UntypedTerm) list
+  | UTmExternal of NameCompared<UntypedTerm list -> UntypedTerm> * Type
+  | UTmDefer of UntypedTerm
+  | UTmRun of UntypedTerm
   override x.ToString() =
-    match x with
-      | UVar name -> handle_op name
-      | ULiteral l -> l.ToString()
-      | UTuple ts -> sprintf "(%s)" (ts |> List.map to_s |> String.concat ", ")
-      | UList ts -> sprintf "[%s]" (ts |> List.map to_s |> String.concat "; ")
-      | UFun (arg, body) -> sprintf "(fun %s -> %s)" (to_s arg) (to_s body)
-      | UFunUnit body -> sprintf "(fun () -> %s)" (to_s body)
-      | UApply (l, r) -> sprintf "(%s %s)" (to_s l) (to_s r)
-      | UConstruct (n, []) -> n
-      | UConstruct (n, [t]) -> sprintf "%s %s" n (to_s t)
-      | UConstruct (n, ts) -> sprintf "%s (%s)" n (ts |> List.map to_s |> String.concat ", ")
-      | UIf (b, t, e) -> sprintf "if %s then %s else %s" (to_s b) (to_s t) (to_s e)
-      | ULet (name, value, body) ->
-        sprintf "let %s = %s in %s" (handle_op name) (to_s value) (to_s body)
-      | UDefer x -> sprintf "<( %s )>" (to_s x)
-      | ULetDefer (name, value, body) ->
-        sprintf "let! %s = %s in %s" (handle_op name) (to_s value) (to_s body)
-      // | UModuleVal (m, f) -> sprintf "%s.%s" m f
-      | UExternal (f, _) -> f.name
-      | UOp2 (x, op, y) -> sprintf "(%s %s %s)" (to_s x) op (to_s y)
-      | UFixMatch (s, cs) -> sprintf "fixpoint %s of %s" s (cs |> List.map (fun (l, r) -> sprintf "%s -> %s" (to_s l) (to_s r)) |> String.concat " | ")
-      | UMatch (v, cs) -> sprintf "match %s with %s" (to_s v) (cs |> List.map (fun (l, r) -> sprintf "%s -> %s" (to_s l) (to_s r)) |> String.concat " | ")
-      | URun x -> sprintf "(run %s)" (to_s x)
+    let rec tos stack uniq = function
+      | UTmLiteral l -> to_s l
+      | UTmBoundVar i -> stack |> List.item i
+      | UTmFun b ->
+        let (nv, uniq) = genUniq uniq in
+        sprintf "(fun %s -> %s)" nv (b |> tos (nv :: stack) uniq)
+      | UTmFreeVar n -> handle_op n
+      | UTmLet (x, v, b) -> sprintf "let %s = %s in %s" (handle_op x) (v |> tos stack uniq) (b |> tos stack uniq)
+      | UTmLetDefer (x, v, b) -> sprintf "let! %s = %s in %s" (handle_op x) (v |> tos stack uniq) (b |> tos stack uniq)
+      | UTmConstruct (n, []) -> n
+      | UTmConstruct (n, [x]) -> sprintf "%s %s" n (x |> tos stack uniq)
+      | UTmConstruct (n, xs) -> sprintf "%s (%s)" n (xs |> List.map (tos stack uniq) |> String.concat ", ")
+      | UTmTuple xs -> sprintf "(%s)" (xs |> List.map (tos stack uniq) |> String.concat ", ")
+      | UTmApply (x, ys) -> sprintf "(%s %s)" (x |> tos stack uniq) (ys |> List.map (tos stack uniq) |> String.concat " ")
+      | UTmMatch (x, cs) -> sprintf "match %s with %s" (x |> tos stack uniq) (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
+      | UTmFixMatch (self, cs) -> sprintf "fixpoint %s of %s" self (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
+      | UTmExternal (f, _) -> f.name
+      | UTmDefer x -> sprintf "<( %s )>" (x |> tos stack uniq)
+      | UTmRun x -> sprintf "(run %s)" (x |> tos stack uniq)
+    in tos [] 0 x
+
+
+type ParsedTerm =
+  | PTmVar of string
+  | PTmLiteral of Literal
+  | PTmTuple of ParsedTerm list
+  | PTmList of ParsedTerm list
+  | PTmFun of string  * ParsedTerm
+  | PTmFunUnit of ParsedTerm
+  | PTmApply of ParsedTerm * ParsedTerm
+  | PTmIf of ParsedTerm * ParsedTerm * ParsedTerm
+  | PTmLet of string * ParsedTerm * ParsedTerm
+  | PTmFixMatch of string * (ParsedTerm * ParsedTerm) list
+  | PTmDefer of ParsedTerm
+  | PTmRun of ParsedTerm
+  | PTmLetDefer of string * ParsedTerm * ParsedTerm
+  // | PTmModuleVal of string * string
+  | PTmOp2 of ParsedTerm * string * ParsedTerm
+  | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
 let ExternalFun nm typ f =
-  UExternal({ name = nm; value = f }, typ)
+  UTmExternal({ name = nm; value = f }, typ)
 
 
 (*
 type TopLevel =
   | Open of string
   | Module of string * TopLevel list
-  | TopLet of string * Type * UntypedTerm
+  | TopLet of string * Type * ParsedTerm
   | TypeDef of string * Type
-  | EntryPoint of UntypedTerm
+  | EntryPoint of ParsedTerm
 *)
 

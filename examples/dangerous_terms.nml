@@ -4,7 +4,10 @@ let nested_fixp =
   | 0 -> 0
 in
 
-nested_fixp 4 |> print !;
+nested_fixp 7 |> print !;
+pause () !;
+
+nested_fixp 8 |> print !;
 pause () !;
 
 let range =
@@ -25,6 +28,6 @@ let grow_list =
   | [] -> []
 in
 
-grow_list (range 5) |> print !;
+grow_list (range 6) |> print !;
 
 ()
