@@ -6,10 +6,13 @@ open nml.Helper
 open nml.Evaluation
 open nml.UniversalContext
 open nml.Builtin
-open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Collections
 open System
 open System.IO
+open Mono.Terminal
+
+let editor = new LineEditor ("nml", 300)
+let inline scan prompt = editor.Edit(prompt, "")
 
 let tryRun ctx code quiet =
   try

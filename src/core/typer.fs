@@ -1,10 +1,12 @@
 module nml.Typer
 
 open nml.Ast
-open nml.Evaluation
 open nml.Helper
 open nml.UniversalContext
 open Microsoft.FSharp.Collections
+
+
+let inline (<+>) l r = List.append l r
 
 type Constraint = | Constraint of Type * Type * UntypedTerm
 let cstr_Extract = function
@@ -18,24 +20,6 @@ let cstr_toAsgn cstr =
   match cstr with
     | xs -> xs |> List.choose (function | Constraint (TypeVar name, t, _) -> Some (name, t) | _ -> None ) |> Map.ofList |> Assign
 
-
-let rec getTyVars = function
-  | TypeVar n -> set [n]
-  | Fun (a, b) -> Set.union (getTyVars a) (getTyVars b)
-  | Deferred t -> getTyVars t
-  | Variant (_, ts, _)
-  | TypeOp (_, ts, _) -> ts |> List.map getTyVars |> List.fold Set.union (set [])
-  | Scheme (vs, t) -> getTyVars t |> Set.union vs
-  | _ -> set []
-
-let hasTyVar vname t =
-  fvOf t |> Set.contains vname
-
-let rec delayTypeBy i ty =
-  if (i > 0) then
-    Deferred ty |> delayTypeBy (i - 1)
-  else
-    ty
 
 // tx |> substIn "x" t
 // --> t [x <- tx]
@@ -528,7 +512,16 @@ and exhaustiveCheck ptns t ctx =
     ()
 
 let prettify uniq t =
-  let fv = getTyVars t in
+  let rec getTyNames = function
+    | TypeVar n -> set [n]
+    | Fun (a, b) -> Set.union (getTyNames a) (getTyNames b)
+    | Deferred t -> getTyNames t
+    | Variant (_, ts, _)
+    | TypeOp (_, ts, _) -> ts |> List.map getTyNames |> List.fold Set.union (set [])
+    | Scheme (vs, t) -> getTyNames t |> Set.union vs
+    | _ -> set []
+  in
+  let fv = getTyNames t in
   let t =
     if (Set.count fv > 0) then
       Scheme (fv, t)

@@ -4,9 +4,7 @@ open nml.Ast
 open nml.Parser
 open nml.Typer
 open nml.Helper
-open nml.Evaluation
 open nml.UniversalContext
-open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Collections
 open System
 
@@ -156,7 +154,8 @@ let builtinTerms = [
   );
   DefRawCode "ignore" "fun _ -> ()";
   DefFun "readNat" [Unit] (Deferred Nat) (fun _ ->
-      scan "readNat> " 
+      printf "readNat> ";
+      Console.ReadLine()
         |> uint32
         |> LNat |> UTmLiteral
   );

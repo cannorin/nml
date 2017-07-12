@@ -74,10 +74,10 @@ Note that each computation in each stage is kept pure functional; everything imp
 - [x] Variants
     - [x] With type parameters
 - [x] Inductive data types (extends variant types)
-    - [ ] Well-founded recursive functions (```let rec```)
+    - [x] Well-founded recursive functions (```let rec```)
 - [x] Pattern matching (```match```)
     - [x] Exhaustiveness check
-    - [ ] Matching functions (```function```)
+    - [x] Matching functions (```function```)
 - [x] Operators
     - [x] Operator definition (```let (+) l r = ...```)
     - [x] Use as a function
@@ -105,7 +105,7 @@ Note that each computation in each stage is kept pure functional; everything imp
 - [x] REPL
     - [x] Line editor
     - [ ] Suggestions & completions
-    - [ ] Load and execute source files
+    - [x] Load and execute source files
     - [ ] Import sources on the fly
 - [ ] Compiler
 - [ ] Interop

@@ -104,7 +104,7 @@ type UntypedTerm =
   override x.ToString() =
     let rec tos stack uniq = function
       | UTmLiteral l -> to_s l
-      | UTmBoundVar i -> stack |> List.item i
+      | UTmBoundVar i -> stack |> List.tryItem i ?| sprintf "{%i}" i
       | UTmFun b ->
         let (nv, uniq) = genUniq uniq in
         sprintf "(fun %s -> %s)" nv (b |> tos (nv :: stack) uniq)
@@ -116,31 +116,12 @@ type UntypedTerm =
       | UTmConstruct (n, xs) -> sprintf "%s (%s)" n (xs |> List.map (tos stack uniq) |> String.concat ", ")
       | UTmTuple xs -> sprintf "(%s)" (xs |> List.map (tos stack uniq) |> String.concat ", ")
       | UTmApply (x, ys) -> sprintf "(%s %s)" (x |> tos stack uniq) (ys |> List.map (tos stack uniq) |> String.concat " ")
-      | UTmMatch (x, cs) -> sprintf "match %s with %s" (x |> tos stack uniq) (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
-      | UTmFixMatch (self, cs) -> sprintf "fixpoint %s of %s" self (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
-      | UTmExternal (f, _) -> f.name
+      | UTmMatch (x, cs) -> sprintf "(match %s with %s)" (x |> tos stack uniq) (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
+      | UTmFixMatch (self, cs) -> sprintf "(fixpoint %s of %s)" self (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
+      | UTmExternal (f, _) -> handle_op f.name
       | UTmDefer x -> sprintf "<( %s )>" (x |> tos stack uniq)
       | UTmRun x -> sprintf "(run %s)" (x |> tos stack uniq)
     in tos [] 0 x
-
-
-type ParsedTerm =
-  | PTmVar of string
-  | PTmLiteral of Literal
-  | PTmTuple of ParsedTerm list
-  | PTmList of ParsedTerm list
-  | PTmFun of string  * ParsedTerm
-  | PTmFunUnit of ParsedTerm
-  | PTmApply of ParsedTerm * ParsedTerm
-  | PTmIf of ParsedTerm * ParsedTerm * ParsedTerm
-  | PTmLet of string * ParsedTerm * ParsedTerm
-  | PTmFixMatch of string * (ParsedTerm * ParsedTerm) list
-  | PTmDefer of ParsedTerm
-  | PTmRun of ParsedTerm
-  | PTmLetDefer of string * ParsedTerm * ParsedTerm
-  // | PTmModuleVal of string * string
-  | PTmOp2 of ParsedTerm * string * ParsedTerm
-  | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
 let ExternalFun nm typ f =
   UTmExternal({ name = nm; value = f }, typ)

@@ -3,17 +3,18 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{EC394A8D-5EEB-4143-B97F-F03F9EBA76CC}</ProjectGuid>
+    <ProjectGuid>{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <RootNamespace>nml</RootNamespace>
-    <AssemblyName>nml</AssemblyName>
+    <RootNamespace>nml.Interpreter</RootNamespace>
+    <AssemblyName>nmli</AssemblyName>
     <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>bin\Debug</OutputPath>
+    <OutputPath>..\..\bin\Debug</OutputPath>
     <DefineConstants>DEBUG;TRACE;</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -22,12 +23,18 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
     <Optimize>true</Optimize>
-    <OutputPath>bin\Release</OutputPath>
+    <OutputPath>..\..\bin\Release</OutputPath>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
     <Tailcalls>true</Tailcalls>
     <PlatformTarget>AnyCPU</PlatformTarget>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\core\nml.Core.fsproj">
+      <Project>{052EA2E7-2A4D-495A-8308-85FF00AF6137}</Project>
+      <Name>nml.Core</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\..\Microsoft SDKs\F#\3.1\Framework\v4.0\Microsoft.FSharp.Targets" />
   <ItemGroup>
     <Reference Include="System" />
@@ -35,26 +42,13 @@
     <Reference Include="FSharp.Core" />
     <Reference Include="System.Core" />
     <Reference Include="System.Numerics" />
-    <Reference Include="FParsec">
-      <HintPath>../packages/FParsec-Big-Data-Edition.1.0.2/lib/net45/FParsec.dll</HintPath>
-    </Reference>
-    <Reference Include="FParsecCS">
-      <HintPath>../packages/FParsec-Big-Data-Edition.1.0.2/lib/net45/FParsecCS.dll</HintPath>
-    </Reference>
     <Reference Include="Mono.Terminal">
-      <HintPath>../packages/Mono.Terminal.5.3.0/lib/net4-client/Mono.Terminal.dll</HintPath>
+      <HintPath>../../packages/Mono.Terminal.5.3.0/lib/net4-client/Mono.Terminal.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.fs" />
-    <Compile Include="prelude.fs" />
-    <Compile Include="ast.fs" />
-    <Compile Include="helper.fs" />
-    <Compile Include="context.fs" />
     <Compile Include="eval.fs" />
-    <Compile Include="typer.fs" />
-    <Compile Include="parser.fs" />
-    <Compile Include="builtin.fs" />
     <Compile Include="main.fs" />
   </ItemGroup>
 </Project>

@@ -15,11 +15,12 @@ let matchPattern pat t =
         ys |> List.map2 mt xs |> List.concat
       | (UTmLiteral x, UTmLiteral y) when x = y ->
         []
+      | (UTmFreeVar "_", y) -> []
       | (UTmFreeVar x, y) -> [(x, y)]
       | _ -> failwith "matchfailed"
   in 
   try
-    mt pat t |> Some
+    mt pat t |> List.sortBy fst |> Some
   with
     | _ -> None
 
@@ -80,6 +81,15 @@ let getTimeOfType ty =
     | Deferred x -> x |> dig (i + 1)
     | x -> (x, i)
   in dig 0 ty
+
+let rec delayTypeBy i ty =
+  if (i > 0) then
+    Deferred ty |> delayTypeBy (i - 1)
+  else
+    ty
+
+let hasTyVar vname t =
+  fvOf t |> Set.contains vname
 
 let rec hasSelf name args = function
   | Variant (n, ts, _)

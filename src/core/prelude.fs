@@ -1,17 +1,12 @@
 [<AutoOpen>]
 module nml.Prelude
 
-open Mono.Terminal
-
 let inline (?|) x y = defaultArg x y
 
 let inline cprintfn color p x =
   System.Console.ForegroundColor <- color;
   printfn p x;
   System.Console.ResetColor ()
-
-let editor = new LineEditor ("nml", 300)
-let inline scan prompt = editor.Edit(prompt, "")
 
 let genUniq ng =
   let a = ng % 26 in

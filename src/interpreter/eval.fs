@@ -55,8 +55,9 @@ let rec e ctx stack mode = function
 
   | UTmTuple xs ->
     xs |> List.map (e ctx stack mode) |> UTmTuple
+  | UTmConstruct ("Succ", [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
   | UTmConstruct ("Succ", [x]) ->
-    UTmApply (UTmFreeVar "+", [x; UTmLiteral (LNat 1u)]) |> e ctx stack mode
+    UTmApply (UTmFreeVar "+", [UTmLiteral (LNat 1u); x]) |> e ctx stack mode
   | UTmConstruct (name, xs) ->
     UTmConstruct (name, xs |> List.map (e ctx stack mode))
   
@@ -70,15 +71,20 @@ let rec e ctx stack mode = function
       | Some l -> UTmApply (l, rs) |> e ctx stack mode
       | None -> UTmApply (UTmBoundVar i, rs |> List.map (e ctx stack mode))
   | UTmApply (l, rs) when (mode |> isReplace) ->
-    UTmApply (l, rs |> List.map (e ctx stack Replace))
+    UTmApply (l |> e ctx stack Replace, rs |> List.map (e ctx stack Replace))
   | UTmApply (UTmFun body, r :: rest) ->
     UTmApply (body |> e ctx (Some (r |> shift 0 1) :: stack) Replace |> shift 0 -1, rest) |> e ctx stack mode
   | UTmApply (UTmFixMatch (self, cases), r :: rest) ->
     match (r |> e ctx stack mode) with
       | x when isValue x ->
-        let m = UTmMatch (x, cases) in 
-        UTmApply (m |> e (ctx |> Map.add self (UTmFixMatch (self, cases))) stack mode, rest) |> e ctx stack mode
-      | x -> UTmApply (UTmFixMatch (self, cases) |>  e ctx stack mode, x :: (rest |> List.map (e ctx stack mode)))
+        match (cases |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
+          | Some (bind, body) ->
+            let ufm = UTmFixMatch (self, cases) |> e (ctx |> Map.remove self) stack mode in 
+            UTmApply (foldLet body bind |> e (ctx |> Map.add self ufm) stack mode, rest) |> e ctx stack mode
+          | None ->
+            printfn "%A" x;
+            failwith "match failed"
+      | x -> UTmApply (UTmFixMatch (self, cases) |>  e ctx stack Replace, x :: (rest |> List.map (e ctx stack mode)))
   | UTmApply (UTmExternal (f, t), rs) ->
     let (targs, _) = t |> expandFun in
     if (List.length rs = List.length targs) then
