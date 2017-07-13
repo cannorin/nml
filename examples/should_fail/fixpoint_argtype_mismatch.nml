@@ -1,0 +1,21 @@
+let range =
+  fixpoint f of
+    Succ n -> n :: f n
+  | 0 -> [0]
+in
+
+let map f =
+  fixpoint g of
+    h :: t -> f h :: g t
+  | [] -> []
+in
+
+let grow_list =
+  fixpoint f of
+    x :: t -> range x |> map (fun _ -> f t)
+  | [] -> []
+in
+
+grow_list (range 6) |> print !;
+
+()

@@ -25,38 +25,11 @@ type ParsedTerm =
   | PTmOp2 of ParsedTerm * string * ParsedTerm
   | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
-let rec fvOfTerm = function
-  | PTmOp2 (l, _, r)
-  | PTmApply (l, r) -> 
-    Set.union (fvOfTerm l) (fvOfTerm r)
-  | PTmDefer x -> fvOfTerm x
-  | PTmFun (a, b) ->
-    Set.difference (fvOfTerm b) (set [a])
-  | PTmIf (b, t, e) -> 
-    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
-  | PTmLet (x, r, b)
-  | PTmLetDefer (x, r, b) ->
-    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | PTmTuple xs
-  | PTmList  xs -> 
-    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
-  | PTmVar x when x <> "_" -> set [x]
-  | PTmMatch (v, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.union (fvOfTerm v)
-  | PTmFixMatch (self, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.difference (set [self])
-  | _ -> set []
-
 let toUntypedTerm ctx pt =
-  let rec tot stack = function
+  let rec totc stack (pt, bd) =
+    let fv = fvOfTerm (pt |> tot []) |> Set.remove "::" |> Set.toList in
+    (pt |> tot (List.append fv stack), bd |> tot (List.append fv stack))
+  and tot stack = function
     | PTmVar x ->
       // constructor without arguments
       if (ctx |> findConstructor x (Some []) |> Option.isSome) then
@@ -93,9 +66,9 @@ let toUntypedTerm ctx pt =
     | PTmIf (x, t, e) ->
       PTmMatch (x, [ (PTmLiteral (LBool true), t); (PTmLiteral (LBool false), e) ]) |> tot stack
     | PTmMatch (x, cs) ->
-      UTmMatch (x |> tot stack, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
+      UTmMatch (x |> tot stack, cs |> List.map (totc stack))
     | PTmFixMatch (n, cs) ->
-      UTmFixMatch (n, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
+      UTmFixMatch (cs |> List.map (totc (n :: stack)))
   in tot [] pt
 
 

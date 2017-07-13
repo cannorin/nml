@@ -16,11 +16,11 @@ let matchPattern pat t =
       | (UTmLiteral x, UTmLiteral y) when x = y ->
         []
       | (UTmFreeVar "_", y) -> []
-      | (UTmFreeVar x, y) -> [(x, y)]
+      | (UTmBoundVar x, y) -> [(x, y)]
       | _ -> failwith "matchfailed"
   in 
   try
-    mt pat t |> List.sortBy fst |> Some
+    mt pat t |> List.map snd |> Some
   with
     | _ -> None
 
@@ -71,7 +71,7 @@ let rec fvOf = function
     ts |> List.map (snd >> (List.map fvOf)) 
        |> List.concat
        |> List.fold Set.union (set [])
-       |> Set.difference (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
+       |> Set.union (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
   | TypeOp (_, ts, _) -> ts |> List.map fvOf |> List.fold Set.union (set [])
   | Scheme (vs, t) -> Set.difference (fvOf t) vs
   | _ -> set []
@@ -114,7 +114,7 @@ let rec isInductive vt =
     | _ -> Some false
 
 let rec fvOfTerm = function
-  | UTmFreeVar x -> set [x]
+  | UTmFreeVar x when x <> "_" -> set [x]
   | UTmApply (l, rs) ->
     l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
   | UTmTuple xs
@@ -129,9 +129,16 @@ let rec fvOfTerm = function
        |> List.concat
        |> Set.ofList
        |> Set.union (fvOfTerm x)
-  | UTmFixMatch (n, cs) ->
-    UTmMatch (UTmLiteral LUnit, cs) |> fvOfTerm |> Set.difference (set [n])
+  | UTmFixMatch cs ->
+    UTmMatch (UTmLiteral LUnit, cs) |> fvOfTerm
   | _ -> set []
+
+let rec countFvOfPattern = function 
+  | UTmBoundVar _ -> 1
+  | UTmTuple xs
+  | UTmConstruct (_, xs) ->
+    xs |> List.map countFvOfPattern |> List.sum
+  | _ -> 0
 
 let rec addRun i t =
   if (i > 0) then

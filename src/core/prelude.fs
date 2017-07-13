@@ -26,5 +26,12 @@ let inline times i f =
     if i <= 0 then acc else t (i - 1) f (f acc)
   in t i f
 
+let inline is_op s = s |> String.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_') |> not
 
+let inline handle_op s =
+  if (is_op s) then
+    "(" + s + ")"
+  else
+    s
+ 
 ()
