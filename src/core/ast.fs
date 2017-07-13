@@ -80,12 +80,6 @@ type Literal =
       | LBool b -> if b then "true" else "false"
       | LUnit -> "()"
 
-let inline handle_op s =
-  if (s |> String.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')) then
-    s
-  else
-    "(" + s + ")"
-
 type UntypedTerm =
   | UTmLiteral of Literal
   | UTmBoundVar of int
@@ -97,14 +91,25 @@ type UntypedTerm =
   | UTmTuple of UntypedTerm list
   | UTmApply of UntypedTerm * UntypedTerm list
   | UTmMatch of UntypedTerm * (UntypedTerm * UntypedTerm) list
-  | UTmFixMatch of string * (UntypedTerm * UntypedTerm) list
+  | UTmFixMatch of (UntypedTerm * UntypedTerm) list
   | UTmExternal of NameCompared<UntypedTerm list -> UntypedTerm> * Type
   | UTmDefer of UntypedTerm
   | UTmRun of UntypedTerm
   override x.ToString() =
-    let rec tos stack uniq = function
+   let rec tosc stack uniq (pt, bd) =
+      let rec countFvOfPattern = function 
+        | UTmBoundVar _ -> 1
+        | UTmTuple xs
+        | UTmConstruct (_, xs) ->
+          xs |> List.map countFvOfPattern |> List.sum
+        | _ -> 0
+      in
+      let (nvs, uniq) = genUniqs uniq (countFvOfPattern pt) in
+      let stack = List.append nvs stack in
+      sprintf "%s -> %s" (tos stack uniq pt) (tos stack uniq bd)
+    and tos stack uniq = function
       | UTmLiteral l -> to_s l
-      | UTmBoundVar i -> stack |> List.item i
+      | UTmBoundVar i -> stack |> List.tryItem i ?| sprintf "{%i}" i
       | UTmFun b ->
         let (nv, uniq) = genUniq uniq in
         sprintf "(fun %s -> %s)" nv (b |> tos (nv :: stack) uniq)
@@ -115,32 +120,20 @@ type UntypedTerm =
       | UTmConstruct (n, [x]) -> sprintf "%s %s" n (x |> tos stack uniq)
       | UTmConstruct (n, xs) -> sprintf "%s (%s)" n (xs |> List.map (tos stack uniq) |> String.concat ", ")
       | UTmTuple xs -> sprintf "(%s)" (xs |> List.map (tos stack uniq) |> String.concat ", ")
+      | UTmApply (UTmFreeVar x, [l; r]) when (is_op x) ->
+        sprintf "(%s %s %s)" (l |> tos stack uniq) x (r |> tos stack uniq)
+      | UTmApply (UTmExternal (f, _), [l; r]) when (is_op f.name) ->
+        sprintf "(%s %s %s)" (l |> tos stack uniq) f.name (r |> tos stack uniq)
       | UTmApply (x, ys) -> sprintf "(%s %s)" (x |> tos stack uniq) (ys |> List.map (tos stack uniq) |> String.concat " ")
-      | UTmMatch (x, cs) -> sprintf "match %s with %s" (x |> tos stack uniq) (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
-      | UTmFixMatch (self, cs) -> sprintf "fixpoint %s of %s" self (cs |> List.map (fun (pt, bd) -> sprintf "%s -> %s" (pt |> tos stack uniq) (bd |> tos stack uniq)) |> String.concat " | ")
-      | UTmExternal (f, _) -> f.name
+      | UTmMatch (x, cs) -> 
+        sprintf "(match %s with %s)" (x |> tos stack uniq) (cs |> List.map (tosc stack uniq) |> String.concat " | ")
+      | UTmFixMatch cs -> 
+        let (nv, uniq) = genUniq uniq in
+        sprintf "(fixpoint %s of %s)" nv (cs |> List.map (tosc (nv :: stack) uniq) |> String.concat " | ")
+      | UTmExternal (f, _) -> handle_op f.name
       | UTmDefer x -> sprintf "<( %s )>" (x |> tos stack uniq)
       | UTmRun x -> sprintf "(run %s)" (x |> tos stack uniq)
     in tos [] 0 x
-
-
-type ParsedTerm =
-  | PTmVar of string
-  | PTmLiteral of Literal
-  | PTmTuple of ParsedTerm list
-  | PTmList of ParsedTerm list
-  | PTmFun of string  * ParsedTerm
-  | PTmFunUnit of ParsedTerm
-  | PTmApply of ParsedTerm * ParsedTerm
-  | PTmIf of ParsedTerm * ParsedTerm * ParsedTerm
-  | PTmLet of string * ParsedTerm * ParsedTerm
-  | PTmFixMatch of string * (ParsedTerm * ParsedTerm) list
-  | PTmDefer of ParsedTerm
-  | PTmRun of ParsedTerm
-  | PTmLetDefer of string * ParsedTerm * ParsedTerm
-  // | PTmModuleVal of string * string
-  | PTmOp2 of ParsedTerm * string * ParsedTerm
-  | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
 let ExternalFun nm typ f =
   UTmExternal({ name = nm; value = f }, typ)

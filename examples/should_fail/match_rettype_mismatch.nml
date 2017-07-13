@@ -1,0 +1,7 @@
+let f n =
+  match n with
+    | Succ n -> n
+    | 0 -> false
+in
+
+f 3

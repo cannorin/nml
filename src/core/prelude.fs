@@ -1,17 +1,12 @@
 [<AutoOpen>]
 module nml.Prelude
 
-open Mono.Terminal
-
 let inline (?|) x y = defaultArg x y
 
 let inline cprintfn color p x =
   System.Console.ForegroundColor <- color;
   printfn p x;
   System.Console.ResetColor ()
-
-let editor = new LineEditor ("nml", 300)
-let inline scan prompt = editor.Edit(prompt, "")
 
 let genUniq ng =
   let a = ng % 26 in
@@ -31,5 +26,12 @@ let inline times i f =
     if i <= 0 then acc else t (i - 1) f (f acc)
   in t i f
 
+let inline is_op s = s |> String.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_') |> not
 
+let inline handle_op s =
+  if (is_op s) then
+    "(" + s + ")"
+  else
+    s
+ 
 ()

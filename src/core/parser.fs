@@ -7,6 +7,71 @@ open nml.Helper
 open nml.UniversalContext
 open FSharp.Collections
 
+type ParsedTerm =
+  | PTmVar of string
+  | PTmLiteral of Literal
+  | PTmTuple of ParsedTerm list
+  | PTmList of ParsedTerm list
+  | PTmFun of string  * ParsedTerm
+  | PTmFunUnit of ParsedTerm
+  | PTmApply of ParsedTerm * ParsedTerm
+  | PTmIf of ParsedTerm * ParsedTerm * ParsedTerm
+  | PTmLet of string * ParsedTerm * ParsedTerm
+  | PTmFixMatch of string * (ParsedTerm * ParsedTerm) list
+  | PTmDefer of ParsedTerm
+  | PTmRun of ParsedTerm
+  | PTmLetDefer of string * ParsedTerm * ParsedTerm
+  // | PTmModuleVal of string * string
+  | PTmOp2 of ParsedTerm * string * ParsedTerm
+  | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
+
+let toUntypedTerm ctx pt =
+  let rec totc stack (pt, bd) =
+    let fv = fvOfTerm (pt |> tot []) |> Set.remove "::" |> Set.toList in
+    (pt |> tot (List.append fv stack), bd |> tot (List.append fv stack))
+  and tot stack = function
+    | PTmVar x ->
+      // constructor without arguments
+      if (ctx |> findConstructor x (Some []) |> Option.isSome) then
+        UTmConstruct (x, [])
+      else
+        match (stack |> List.tryFindIndex ((=) x)) with
+          | Some i -> UTmBoundVar i
+          | None -> UTmFreeVar x
+    | PTmLiteral l -> UTmLiteral l
+    | PTmTuple xs -> UTmTuple (xs |> List.map (tot stack))
+    | PTmList [] -> UTmConstruct ("Nil", [])
+    | PTmList xs -> xs |> List.rev |> List.fold (fun l x -> UTmConstruct ("Cons", [tot stack x; l])) (UTmConstruct ("Nil", []))
+    | PTmFun (arg, body) -> UTmFun (body |> tot (arg :: stack))
+    | PTmFunUnit body -> UTmFun (body |> tot ("" :: stack))
+    // immediate constructor handling
+    | PTmApply (PTmVar x, PTmTuple xs) when (ctx |> findConstructor x (Some xs) |> Option.isSome) ->
+      UTmConstruct (x, xs |> List.map (tot stack))
+    // immediate constructor handling
+    | PTmApply (PTmVar x, y) when (ctx |> findConstructor x (Some [y]) |> Option.isSome)  ->
+      UTmConstruct (x, [y |> tot stack])
+    | PTmApply (l, r) ->
+      match (l |> tot stack) with
+        | UTmApply (l', r') -> UTmApply (l', List.append r' [tot stack r])
+        | x -> UTmApply (x, [tot stack r])
+    | PTmDefer x -> UTmDefer (tot stack x)
+    | PTmRun x -> UTmRun (tot stack x)
+    | PTmLet (x, r, b) ->
+      UTmLet (x, r |> tot stack, b |> tot stack)
+    | PTmLetDefer (x, r, b) ->
+      UTmLetDefer (x, r |> tot stack, b |> tot stack)
+      // UTmDefer (PTmLet (x, PTmRun r, b) |> tot stack)
+    | PTmOp2 (l, op, r) ->
+      PTmApply (PTmApply (PTmVar op, l), r) |> tot stack
+    | PTmIf (x, t, e) ->
+      PTmMatch (x, [ (PTmLiteral (LBool true), t); (PTmLiteral (LBool false), e) ]) |> tot stack
+    | PTmMatch (x, cs) ->
+      UTmMatch (x |> tot stack, cs |> List.map (totc stack))
+    | PTmFixMatch (n, cs) ->
+      UTmFixMatch (cs |> List.map (totc (n :: stack)))
+  in tot [] pt
+
+
 exception ParserFailed of string
 
 let term, termRef = createParserForwardedToRef<ParsedTerm, unit>()
@@ -227,75 +292,3 @@ let parseTerm text =
     | Failure (msg, _, _) -> ParserFailed msg |> raise
 ()
 
-let rec fvOfTerm = function
-  | PTmOp2 (l, _, r)
-  | PTmApply (l, r) -> 
-    Set.union (fvOfTerm l) (fvOfTerm r)
-  | PTmDefer x -> fvOfTerm x
-  | PTmFun (a, b) ->
-    Set.difference (fvOfTerm b) (set [a])
-  | PTmIf (b, t, e) -> 
-    fvOfTerm b |> Set.union (fvOfTerm t) |> Set.union (fvOfTerm e)
-  | PTmLet (x, r, b)
-  | PTmLetDefer (x, r, b) ->
-    Set.union (fvOfTerm r) (fvOfTerm b |> Set.difference (set [x]))
-  | PTmTuple xs
-  | PTmList  xs -> 
-    xs |> List.map (Set.toList << fvOfTerm) |> List.concat |> Set.ofList
-  | PTmVar x when x <> "_" -> set [x]
-  | PTmMatch (v, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.union (fvOfTerm v)
-  | PTmFixMatch (self, cs) ->
-    cs 
-      |> List.map (fun (x, y) -> Set.difference (fvOfTerm x) (fvOfTerm y) |> Set.toList)
-      |> List.concat
-      |> Set.ofList
-      |> Set.difference (set [self])
-  | _ -> set []
-
-let toUntypedTerm ctx pt =
-  let rec tot stack = function
-    | PTmVar x ->
-      // constructor without arguments
-      if (ctx |> findConstructor x (Some []) |> Option.isSome) then
-        UTmConstruct (x, [])
-      else
-        match (stack |> List.tryFindIndex ((=) x)) with
-          | Some i -> UTmBoundVar i
-          | None -> UTmFreeVar x
-    | PTmLiteral l -> UTmLiteral l
-    | PTmTuple xs -> UTmTuple (xs |> List.map (tot stack))
-    | PTmList [] -> UTmConstruct ("Nil", [])
-    | PTmList xs -> xs |> List.rev |> List.fold (fun l x -> UTmConstruct ("Cons", [tot stack x; l])) (UTmConstruct ("Nil", []))
-    | PTmFun (arg, body) -> UTmFun (body |> tot (arg :: stack))
-    | PTmFunUnit body -> UTmFun (body |> tot ("" :: stack))
-    // immediate constructor handling
-    | PTmApply (PTmVar x, PTmTuple xs) when (ctx |> findConstructor x (Some xs) |> Option.isSome) ->
-      UTmConstruct (x, xs |> List.map (tot stack))
-    // immediate constructor handling
-    | PTmApply (PTmVar x, y) when (ctx |> findConstructor x (Some [y]) |> Option.isSome)  ->
-      UTmConstruct (x, [y |> tot stack])
-    | PTmApply (l, r) ->
-      match (l |> tot stack) with
-        | UTmApply (l', r') -> UTmApply (l', List.append r' [tot stack r])
-        | x -> UTmApply (x, [tot stack r])
-    | PTmDefer x -> UTmDefer (tot stack x)
-    | PTmRun x -> UTmRun (tot stack x)
-    | PTmLet (x, r, b) ->
-      UTmLet (x, r |> tot stack, b |> tot stack)
-    | PTmLetDefer (x, r, b) ->
-      UTmLetDefer (x, r |> tot stack, b |> tot stack)
-      // UTmDefer (PTmLet (x, PTmRun r, b) |> tot stack)
-    | PTmOp2 (l, op, r) ->
-      PTmApply (PTmApply (PTmVar op, l), r) |> tot stack
-    | PTmIf (x, t, e) ->
-      PTmMatch (x, [ (PTmLiteral (LBool true), t); (PTmLiteral (LBool false), e) ]) |> tot stack
-    | PTmMatch (x, cs) ->
-      UTmMatch (x |> tot stack, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
-    | PTmFixMatch (n, cs) ->
-      UTmFixMatch (n, cs |> List.map (fun (p, b) -> (tot [] p, tot (stack |> List.map (fun n -> if (fvOfTerm p |> Set.contains n) then "" else n)) b)))
-  in tot [] pt

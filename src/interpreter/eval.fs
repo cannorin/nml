@@ -24,8 +24,8 @@ let rec shift c d = function
   | UTmLet (n, v, b) -> UTmLet (n, v |> shift c d, b |> shift c d)
   | UTmTuple xs -> UTmTuple (xs |> List.map (shift c d))
   | UTmConstruct (n, xs) -> UTmConstruct (n, xs |> List.map (shift c d))
-  | UTmMatch (x, cs) -> UTmMatch (x |> shift c d, cs |> List.map (fun (p, b) -> (p, b |> shift c d)))
-  | UTmFixMatch (s, cs) -> UTmFixMatch (s, cs |> List.map (fun (p, b) -> (p, b |> shift c d)))
+  | UTmMatch (x, cs) -> UTmMatch (x |> shift c d, cs |> List.map (fun (p, b) -> (p, b |> shift (c + countFvOfPattern p) d)))
+  | UTmFixMatch cs -> UTmFixMatch (cs |> List.map (fun (p, b) -> (p, b |> shift (c + 1 + countFvOfPattern p) d)))
   | UTmDefer x -> UTmDefer (x |> shift c d)
   | UTmRun x -> UTmRun (x |> shift c d)
   | x -> x
@@ -40,7 +40,7 @@ let rec e ctx stack mode = function
   | UTmFreeVar name ->
     ctx |> Map.tryFind name ?| UTmFreeVar name
   | UTmBoundVar i when (i < List.length stack) ->
-    stack |> List.item i ?| UTmBoundVar i
+    stack.[i] ?| UTmBoundVar i
   
   | UTmFun x ->
     x |> e ctx (None :: stack) Replace |> UTmFun
@@ -55,12 +55,15 @@ let rec e ctx stack mode = function
 
   | UTmTuple xs ->
     xs |> List.map (e ctx stack mode) |> UTmTuple
+  | UTmConstruct ("Succ", [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
   | UTmConstruct ("Succ", [x]) ->
-    UTmApply (UTmFreeVar "+", [x; UTmLiteral (LNat 1u)]) |> e ctx stack mode
+    UTmApply (UTmFreeVar "+", [UTmLiteral (LNat 1u); x]) |> e ctx stack mode
   | UTmConstruct (name, xs) ->
     UTmConstruct (name, xs |> List.map (e ctx stack mode))
   
   | UTmApply (l, []) -> l |> e ctx stack mode
+  | UTmApply (l, UTmBoundVar i :: rest) when (i >= List.length stack || stack.[i] |> Option.isNone) ->
+    UTmApply (l |> e ctx stack mode, UTmBoundVar i :: (rest |> List.map (e ctx stack mode)))
   | UTmApply (UTmApply (l, rs1), rs2) ->
     UTmApply (l, List.append rs1 rs2) |> e ctx stack mode
   | UTmApply (UTmFreeVar n, rs) when (ctx |> Map.containsKey n) ->
@@ -69,16 +72,27 @@ let rec e ctx stack mode = function
     match (stack |> List.item i) with
       | Some l -> UTmApply (l, rs) |> e ctx stack mode
       | None -> UTmApply (UTmBoundVar i, rs |> List.map (e ctx stack mode))
+  | UTmApply (UTmFun body, r :: rest) when (isValue r) ->
+    UTmApply (body |> e ctx (Some (r |> shift 0 1) :: stack) Replace |> shift 0 -1, rest) |> e ctx stack mode
+  | UTmApply (UTmFixMatch cases, r :: rest) when (mode |> isReplace && isValue r) ->
+    UTmApply (UTmApply (UTmFixMatch cases, r :: []) |> e ctx stack Reduce, rest |> List.map (e ctx stack mode))
   | UTmApply (l, rs) when (mode |> isReplace) ->
-    UTmApply (l, rs |> List.map (e ctx stack Replace))
+    UTmApply (l |> e ctx stack Replace, rs |> List.map (e ctx stack Replace))
   | UTmApply (UTmFun body, r :: rest) ->
     UTmApply (body |> e ctx (Some (r |> shift 0 1) :: stack) Replace |> shift 0 -1, rest) |> e ctx stack mode
-  | UTmApply (UTmFixMatch (self, cases), r :: rest) ->
+  | UTmApply (UTmFixMatch cases, r :: rest) ->
     match (r |> e ctx stack mode) with
-      | x when isValue x ->
-        let m = UTmMatch (x, cases) in 
-        UTmApply (m |> e (ctx |> Map.add self (UTmFixMatch (self, cases))) stack mode, rest) |> e ctx stack mode
-      | x -> UTmApply (UTmFixMatch (self, cases) |>  e ctx stack mode, x :: (rest |> List.map (e ctx stack mode)))
+      | x when (isValue x) ->
+        match (cases |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
+          | Some (bind, body) ->
+            let ufm = UTmFixMatch cases |> e ctx stack mode |> shift 0 1 in
+            let bind' = bind |> List.map (shift 0 1 >> Some) in
+            let mt = body |> e ctx (bind' <+> [Some ufm] <+> List.init (List.length stack) (fun _ -> None)) Replace |> shift 0 -1 in
+            UTmApply(mt, rest) |> e ctx stack mode
+          | None ->
+            printfn "%s" (UTmApply (UTmFixMatch cases, x :: rest) |> to_s);
+            failwith "match failed"
+      | x -> UTmApply (UTmFixMatch cases |> e ctx stack Replace, x :: (rest |> List.map (e ctx stack mode)))
   | UTmApply (UTmExternal (f, t), rs) ->
     let (targs, _) = t |> expandFun in
     if (List.length rs = List.length targs) then
@@ -100,17 +114,16 @@ let rec e ctx stack mode = function
       | x when (x |> isValue && mode |> isReplace |> not) ->
         match (cs |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
           | Some (bind, body) ->
-            foldLet body bind |> e ctx stack mode
+            let bind = bind |> List.map Some in
+            body |> e ctx (bind <+> stack) mode
           | None ->
-            printfn "%A" x;
+            printfn "%s" (to_s (UTmMatch (x, cs)));
             failwith "match failed"
       | x ->
-        let ctxOf pt = ctx |> Map.filter (fun k _ -> fvOfTerm pt |> Set.contains k |> not) in
-        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e (ctxOf pt) stack Replace)))
+        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) <+> stack) Replace)))
   
-  | UTmFixMatch (self, cs) ->
-    let ctxOf pt = ctx |> Map.filter (fun k _ -> k <> self && fvOfTerm pt |> Set.contains k |> not) in
-    UTmFixMatch (self, cs |> List.map (fun (pt, bd) -> (pt, bd |> e (ctxOf pt) stack mode)))    
+  | UTmFixMatch cs ->
+    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) <+> stack) Replace)))
  
   | UTmDefer x ->
     match mode with
