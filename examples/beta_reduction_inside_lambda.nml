@@ -1,0 +1,5 @@
+let tuple2 a b = (a, b) in
+
+let tuple2_id x = tuple2 x in
+
+tuple2_id |> print
