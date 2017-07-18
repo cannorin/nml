@@ -215,7 +215,7 @@ let rec recon ctx stack uniq term =
               |> List.map2 (fun x (y, z) -> Constraint (y, z, x)) args'
           in
           let (u, uniq) = genUniq uniq in
-          (UTmConstruct (n, args'), TypeVar u, uniq, List.concat [ vcstrs; cstrs; [ Constraint (TypeVar u, Variant (name, vtargs', cts'), UTmConstruct (n, args')) ]; ])
+          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs <+> cstrs <+> Constraint (TypeVar u, Variant (name, vtargs', cts'), UTmConstruct (n, args')) :: [])
         | _
         | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
     
@@ -325,7 +325,7 @@ let rec recon ctx stack uniq term =
       let bcstr =
         tbs |> List.map2 (fun x t -> Constraint (b, t, x)) bs'
       in
-      let cstrs = cstr <+> css <+> bcstr <+> Constraint (tv, a, v') :: []in
+      let cstrs = cstr <+> css <+> bcstr <+> Constraint (tv, a, v') :: [] in
       (term', b, uniq, cstrs)
     
     | UTmFixMatch cases ->
@@ -340,12 +340,11 @@ let rec recon ctx stack uniq term =
       let ctx' = ctx |> typerAdd "x" targ' in
       let (mth, tmth, uniq, cstr1) = recon ctx' (tthis :: stack) uniq (UTmMatch (UTmFreeVar "x", cases)) in
 
-      let su = substAll (cstr1 |> unify |> cstr_toAsgn) >> to_s in
-
+      let (ret, uniq) = genUniq uniq in
       match mth with
         | UTmMatch (_, cases) ->
           verifyTermination cases |> ignore;
-          (UTmFixMatch cases, Fun (targ', tmth), uniq, cstr1 <+> Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: [])
+          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 <+> Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: Constraint (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
         | _ ->
           failwith "impossible_UFixMatch"
 

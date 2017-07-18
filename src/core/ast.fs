@@ -1,7 +1,5 @@
 module nml.Ast
-
-let inline to_s x = x.ToString()
-  
+ 
 [<CustomEquality; NoComparison>]
 type EqualityNull<'T> = 
   | Value of 'T

@@ -1,6 +1,7 @@
 [<AutoOpen>]
 module nml.Prelude
 
+let inline to_s x = x.ToString()
 let inline (?|) x y = defaultArg x y
 
 let inline cprintfn color p x =
@@ -33,5 +34,9 @@ let inline handle_op s =
     "(" + s + ")"
   else
     s
- 
+
+let inline listen x =
+  printfn "%s" (to_s x);
+  x
+
 ()

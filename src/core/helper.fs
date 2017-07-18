@@ -103,7 +103,7 @@ let rec hasSelf name args = function
 let rec isInductive vt =
   match vt with
     | Variant (vname, vtargs, cts) ->
-      let hasRec = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs)) in
+      let hasRec = cts |> List.exists (snd >> List.exists (hasSelf vname vtargs)) in
       let hasBottom = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs >> not)) in
       if (hasRec && hasBottom) then
         Some true

@@ -1,0 +1,60 @@
+let add l =
+  fixpoint f of
+    Succ n -> Succ (f n)
+  | 0 -> l
+in
+
+let mul a =
+  fixpoint f of
+    Succ n -> add (f n) a
+  | 0 -> 0
+in
+
+let sub =
+  fixpoint f of
+  | Succ n -> 
+    begin function
+      Succ m -> f n m
+    | 0 -> Some (Succ n)
+    end
+  | 0 ->
+    begin function
+      Succ _ -> None
+    | 0 -> Some 0
+    end
+in
+
+let gt orEqual =
+  fixpoint f of
+  | Succ n -> 
+    begin function
+      Succ m -> f n m
+    | 0 -> true
+    end
+  | 0 ->
+    begin function
+      Succ _ -> false
+    | 0 -> orEqual
+    end
+in
+
+let mod n d =
+  let f =
+    fixpoint f of
+      0 -> id
+    | Succ j ->
+      begin fun r ->
+        if Succ r = d then
+          f j 0
+        else
+          f j (Succ r)
+      end
+  in f n 0
+in
+
+add 4 3 |> print !;
+mul 7 6 |> print !;
+sub 7 5 |> print !;
+gt true 4 3 |> print !;
+gt false 2 2 |> print !;
+mod 100 7 |> print

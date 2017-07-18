@@ -47,7 +47,7 @@ let rec e ctx stack mode = function
   
   | UTmLet (name, value, body) ->
     if (mode |> isReplace) then
-      UTmLet (name, value |> e ctx stack mode, body |> e ctx stack mode)
+      UTmLet (name, value |> e ctx stack mode, body |> e (ctx |> Map.remove name) stack mode)
     else
       body |> e (ctx |> Map.add name (value |> e ctx stack mode)) stack mode
   | UTmLetDefer _ ->
@@ -57,15 +57,17 @@ let rec e ctx stack mode = function
     xs |> List.map (e ctx stack mode) |> UTmTuple
   | UTmConstruct ("Succ", [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
   | UTmConstruct ("Succ", [x]) ->
-    UTmApply (UTmFreeVar "+", [UTmLiteral (LNat 1u); x]) |> e ctx stack mode
+    UTmApply (UTmFreeVar "+", [UTmLiteral (LNat 1u); x |> e ctx stack mode]) |> e ctx stack mode
   | UTmConstruct (name, xs) ->
     UTmConstruct (name, xs |> List.map (e ctx stack mode))
   
   | UTmApply (l, []) -> l |> e ctx stack mode
   | UTmApply (UTmApply (l, rs1), rs2) ->
     UTmApply (l, List.append rs1 rs2) |> e ctx stack mode
-  | UTmApply (UTmFreeVar n, rs) when (ctx |> Map.containsKey n) ->
-    UTmApply (ctx |> Map.find n, rs) |> e ctx stack mode
+  | UTmApply (UTmFreeVar n, rs) ->
+    match (ctx |> Map.tryFind n) with
+      | Some l -> UTmApply (l, rs) |> e ctx stack mode
+      | None -> UTmApply (UTmFreeVar n, rs |> List.map (e ctx stack mode))
   | UTmApply (UTmBoundVar i, rs) when (i < List.length stack) ->
     match (stack |> List.item i) with
       | Some l -> UTmApply (l, rs) |> e ctx stack mode
@@ -73,15 +75,17 @@ let rec e ctx stack mode = function
   | UTmApply (l, rs) when (mode |> isReplace) ->
     UTmApply (l |> e ctx stack Replace, rs |> List.map (e ctx stack Replace))
   | UTmApply (UTmFun body, r :: rest) ->
-    UTmApply (body |> e ctx (Some (r |> shift 0 1) :: stack) Replace |> shift 0 -1, rest) |> e ctx stack mode
+    UTmApply (body |> e ctx ((Some r :: stack) |> List.map (Option.map (shift 0 1))) Replace |> shift 0 -1, rest) |> e ctx stack mode
   | UTmApply (UTmFixMatch cases, r :: rest) ->
     match (r |> e ctx stack mode) with
       | x when (isValue x) ->
         match (cases |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
           | Some (bind, body) ->
-            let ufm = UTmFixMatch cases |> e ctx stack mode |> shift 0 1 in
-            let bind' = bind |> List.map (shift 0 1 >> Some) in
-            let mt = body |> e ctx (bind' <+> [Some ufm] <+> List.init (List.length stack) (fun _ -> None)) Replace |> shift 0 -1 in
+            let s = List.length bind + 1 in
+            let ufm = UTmFixMatch cases |> shift 0 s |> e ctx stack mode in
+            let bind' = bind |> List.map (shift 0 s >> Some) in
+            let stack' = stack |> List.map (Option.map (shift 0 s)) in
+            let mt = body |> e ctx (bind' <+> [Some ufm] <+> stack') Replace |> shift 0 -s in
             UTmApply(mt, rest) |> e ctx stack mode
           | None ->
             printfn "%s" (UTmApply (UTmFixMatch cases, x :: rest) |> to_s);
@@ -114,10 +118,10 @@ let rec e ctx stack mode = function
             printfn "%s" (to_s (UTmMatch (x, cs)));
             failwith "match failed"
       | x ->
-        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) <+> stack) mode)))
+        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) <+> stack |> List.map (Option.map (shift 0 (countFvOfPattern pt)))) mode)))
   
   | UTmFixMatch cs ->
-    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) <+> stack) mode)))
+    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) <+> stack |> List.map (Option.map (shift 0 (1 + countFvOfPattern pt)))) mode)))
  
   | UTmDefer x ->
     match mode with
