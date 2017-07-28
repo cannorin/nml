@@ -1,8 +1,44 @@
 [<AutoOpen>]
 module nml.Prelude
 
+open Microsoft.FSharp.Collections
+
+type nat = uint32
+
+[<CustomEquality; NoComparison>]
+type EqualityNull<'T> = 
+  | Value of 'T
+  | Null
+  override x.Equals(yobj) =
+    match yobj with
+      | :? EqualityNull<'T> as y -> true
+      | _ -> false
+  override x.GetHashCode() = 0
+
+[<CustomEquality; NoComparison>]
+type NameCompared<'T> = 
+  { value: 'T; name: string }
+  override x.Equals(yobj) =
+    match yobj with
+      | :? NameCompared<'T> as y -> x.name = y.name
+      | _ -> false
+  override x.GetHashCode() = 0
+
+module Map = begin
+  let map2 f m =
+    m |> Map.toList |> List.map f |> Map.ofList
+
+  let keys m =
+    m |> Map.toList |> List.map fst |> Set.ofList
+end
+
+
 let inline to_s x = x.ToString()
 let inline (?|) x y = defaultArg x y
+
+let inline fstOf3 (x, _, _) = x
+let inline sndOf3 (_, y, _) = y
+let inline trdOf3 (_, _, z) = z
 
 let inline cprintfn color p x =
   System.Console.ForegroundColor <- color;

@@ -43,6 +43,7 @@
   <ItemGroup>
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="prelude.fs" />
+    <Compile Include="stages.fs" />
     <Compile Include="ast.fs" />
     <Compile Include="helper.fs" />
     <Compile Include="context.fs" />

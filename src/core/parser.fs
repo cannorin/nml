@@ -25,6 +25,26 @@ type ParsedTerm =
   | PTmOp2 of ParsedTerm * string * ParsedTerm
   | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
+let rec fvOfTerm = function
+  | UTmFreeVar x when x <> "_" -> set [x]
+  | UTmApply (l, rs) ->
+    l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
+  | UTmTuple xs
+  | UTmConstruct (_, xs) ->
+    xs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
+  | UTmFun x
+  | UTmDefer x
+  | UTmRun x -> fvOfTerm x
+  | UTmLet (x, v, b) -> Set.union (fvOfTerm v) (fvOfTerm b) |> Set.difference (set [x])
+  | UTmMatch (x, cs) ->
+    cs |> List.map (fun (pt, bd) -> Set.difference (fvOfTerm pt) (fvOfTerm bd) |> Set.toList)
+       |> List.concat
+       |> Set.ofList
+       |> Set.union (fvOfTerm x)
+  | UTmFixMatch cs ->
+    UTmMatch (UTmLiteral LUnit, cs) |> fvOfTerm
+  | _ -> set []
+
 let toUntypedTerm ctx pt =
   let rec totc stack (pt, bd) =
     let fv = fvOfTerm (pt |> tot []) |> Set.remove "::" |> Set.toList in

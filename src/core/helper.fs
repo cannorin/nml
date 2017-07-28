@@ -1,6 +1,24 @@
 module nml.Helper
 
 open nml.Ast
+open nml.Stages
+
+//let TChar = TypeOp ("Char", [], None)
+
+let TTuple ts =
+  TypeOp ("*", ts, Value(" * ", "%s"))
+
+let TList a =
+  InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]), SVar "b")
+
+let TOption a =
+  Variant ("Option", [a], [ ("Some", [a]); ("None", []) ]);
+
+let NatS s =
+  InductiveVariant ("Nat", [], (fun self -> [ ("Succ", [self]); ("0", []) ]), s)
+
+let Nat = NatS (SVar "b")
+
 
 let matchPattern pat t =
   let rec mt pat t =
@@ -48,7 +66,7 @@ let rec foldLet body binds =
 
 // a -> b -> c -> d --> ([a; b; c], d)
 let rec expandFun = function
-  | Scheme (_, t) -> expandFun t
+  | Scheme (_, _, t) -> expandFun t
   | Fun (a, Fun (b, c)) ->
     let (args, ret) = Fun (b, c) |> expandFun in
     (a :: args, ret)
@@ -67,13 +85,23 @@ let rec fvOf = function
   | TypeVar n -> set [n]
   | Fun (a, b) -> Set.union (fvOf a) (fvOf b)
   | Deferred t -> fvOf t
-  | Variant (_, vs, ts) -> 
+  | DataType (_, vs, ts, _, _) -> 
     ts |> List.map (snd >> (List.map fvOf)) 
        |> List.concat
        |> List.fold Set.union (set [])
        |> Set.union (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
-  | TypeOp (_, ts, _) -> ts |> List.map fvOf |> List.fold Set.union (set [])
-  | Scheme (vs, t) -> Set.difference (fvOf t) vs
+  | Scheme (vs, _, t) -> Set.difference (fvOf t) vs
+  | _ -> set []
+
+let rec fsvOf = function
+  | Fun (a, b) -> Set.union (fsvOf a) (fsvOf b)
+  | Deferred t -> fsvOf t
+  | DataType (_, _, ts, s, _) ->
+    let fsv = s |> Option.map (StageOp.fvOf) ?| (set []) in
+    ts |> List.map (snd >> (List.map fsvOf))
+       |> List.concat
+       |> List.fold Set.union fsv
+  | Scheme (_, ss, t) -> Set.difference (fsvOf t) (Map.keys ss)
   | _ -> set []
 
 let getTimeOfType ty =
@@ -92,17 +120,17 @@ let hasTyVar vname t =
   fvOf t |> Set.contains vname
 
 let rec hasSelf name args = function
-  | Variant (n, ts, _)
-  | TypeOp (n, ts, _) when (n = name && ts = args) -> true
+  | DataType (n, ts, _, _, _) when (n = name && ts = args) -> true
+  | DataType (_, ts, _, _, _) -> 
+    ts |> List.exists (fun t -> hasSelf name args t)
   | Fun (a, b) -> hasSelf name args a || hasSelf name args b
-  | Scheme (_, t)
+  | Scheme (_, _, t)
   | Deferred t -> hasSelf name args t
-  | TypeOp (_, ts, _) -> ts |> List.exists (fun t -> hasSelf name args t)
   | _ -> false
 
 let rec isInductive vt =
   match vt with
-    | Variant (vname, vtargs, cts) ->
+    | DataType (vname, vtargs, cts, _, _) ->
       let hasRec = cts |> List.exists (snd >> List.exists (hasSelf vname vtargs)) in
       let hasBottom = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs >> not)) in
       if (hasRec && hasBottom) then
@@ -112,26 +140,6 @@ let rec isInductive vt =
       else
         Some false
     | _ -> Some false
-
-let rec fvOfTerm = function
-  | UTmFreeVar x when x <> "_" -> set [x]
-  | UTmApply (l, rs) ->
-    l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
-  | UTmTuple xs
-  | UTmConstruct (_, xs) ->
-    xs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
-  | UTmFun x
-  | UTmDefer x
-  | UTmRun x -> fvOfTerm x
-  | UTmLet (x, v, b) -> Set.union (fvOfTerm v) (fvOfTerm b) |> Set.difference (set [x])
-  | UTmMatch (x, cs) ->
-    cs |> List.map (fun (pt, bd) -> Set.difference (fvOfTerm pt) (fvOfTerm bd) |> Set.toList)
-       |> List.concat
-       |> Set.ofList
-       |> Set.union (fvOfTerm x)
-  | UTmFixMatch cs ->
-    UTmMatch (UTmLiteral LUnit, cs) |> fvOfTerm
-  | _ -> set []
 
 let rec countFvOfPattern = function 
   | UTmBoundVar _ -> 1

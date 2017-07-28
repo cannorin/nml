@@ -1,75 +1,30 @@
 module nml.Ast
- 
-[<CustomEquality; NoComparison>]
-type EqualityNull<'T> = 
-  | Value of 'T
-  override x.Equals(yobj) =
-    match yobj with
-      | :? EqualityNull<'T> as y -> true
-      | _ -> false
-  override x.GetHashCode() = 0
-
-[<CustomEquality; NoComparison>]
-type NameCompared<'T> = 
-  { value: 'T; name: string }
-  override x.Equals(yobj) =
-    match yobj with
-      | :? NameCompared<'T> as y -> x.name = y.name
-      | _ -> false
-  override x.GetHashCode() = 0
-
+open nml.Stages
 
 type Type =
   | TypeVar of string
   | Bool | Unit
   | Fun of Type * Type
   | Deferred of Type
-  | TypeOp of string * Type list * EqualityNull<(string * Printf.StringFormat<string -> string>) option>
-  | Variant of string * Type list * (string * Type list) list
-  | Scheme of Set<string> * Type
-  override x.ToString() =
-    let inline to_sc x =
-      match x with
-        | TypeVar _ | Bool | Unit | Deferred _ -> to_s x
-        | TypeOp (n, [], _)
-        | Variant (n, [], _) -> n
-        | c -> "(" + (to_s c) + ")"
-    in
-    match x with
-      | TypeVar s -> s
-      | Bool -> "Bool"
-      | Unit -> "Unit"
-      | Fun (a, b) -> sprintf "%s -> %s" (to_sc a) (to_s b)
-      | Deferred t -> sprintf "<%s>" (to_s t)
-      | TypeOp (n, [], _) -> n
-      | TypeOp (n, ts, Value (Some (c, f))) -> sprintf f (ts |> List.map to_sc |> String.concat c)
-      | TypeOp (n, ts, Value None) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
-      | Variant (n, [], _) -> n
-      | Variant (n, ts, _) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n 
-      | Scheme (ts, t) -> sprintf "∀%s. (%s)" (ts |> String.concat ", ") (to_s t)
+  | DataType of string 
+              * Type list 
+              * (string * Type list) list
+              * Stage option
+              * EqualityNull<string * Printf.StringFormat<string -> string>>
+  | Scheme of Set<string> * Map<string, Stage> * Type
+  override x.ToString() = sprintf "%A" x
+    
+let TypeOp (name, ts, po) =
+  DataType (name, ts, [], None, po)
 
-//let TChar = TypeOp ("Char", [], None)
+let Variant (name, ts, cs) =
+  DataType (name, ts, cs, None, Null)
 
-let NewTypeOp (tn, ts, o) =
-  TypeOp (tn, ts, Value o)
-
-let TTuple ts =
-  NewTypeOp ("*", ts, Some(" * ", "%s"))
-
-let InductiveVariant (n, ts, f) =
-  Variant (n, ts, TypeOp (n, ts, Value None) |> f)
-
-let TList a =
-  InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]))
-
-let TOption a =
-  Variant ("Option", [a], [ ("Some", [a]); ("None", []) ]);
-
-let Nat = 
-  InductiveVariant ("Nat", [], (fun self -> [ ("Succ", [self]); ("0", []) ]))
+let InductiveVariant (n, ts, f, stage) =
+  DataType (n, ts, DataType (n, ts, [], Some stage, Null) |> f, Some (SSucc stage), Null)
 
 type Literal =
-  | LNat of uint32
+  | LNat of nat
   | LBool of bool
   | LUnit
   override x.ToString() =

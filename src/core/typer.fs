@@ -1,90 +1,187 @@
 module nml.Typer
 
 open nml.Ast
+open nml.Stages
 open nml.Helper
 open nml.UniversalContext
 open Microsoft.FSharp.Collections
 
 let inline (<+>) l r = List.append l r
 
-type Constraint = | Constraint of Type * Type * UntypedTerm
-let cstr_Extract = function
-  | Constraint (s, t, u) -> (s, t, u)
+type Constraint = 
+  | CTypeEq of Type * Type * UntypedTerm
+  | CStageLte of StageInequality * Type * Type * UntypedTerm
 
-type Assign = | Assign of Map<string, Type>
-let asgn_Extract = function
-  | Assign x -> x
+type Assign =
+  | AType of Type
+  | AStage of Stage * StageAssignType
+and StageAssignType = SALeft | SARight
 
-let cstr_toAsgn cstr =
-  match cstr with
-    | xs -> xs |> List.choose (function | Constraint (TypeVar name, t, _) -> Some (name, t) | _ -> None ) |> Map.ofList |> Assign
+let cstr_toAsgn xs =
+  let f = function
+    | CTypeEq (TypeVar x, ty, _) -> (x, AType ty) |> Some
+    | CStageLte (StageInequality (SVar x, sy), _, _, _) -> (x, AStage (sy, SARight)) |> Some
+    | CStageLte (StageInequality (sx, SVar y), _, _, _) -> (y, AStage (sx, SALeft)) |> Some
+    | _ -> None
+  in
+  xs |> List.choose f |> Map.ofList 
 
-// tx |> substIn "x" t
+// t |> replaceType "x" tx
 // --> t [x <- tx]
-let substIn vname tsbj tvl =
+let replaceType vname tvl tsbj =
   let rec sub = function
     | Fun (a, b) -> Fun (sub a, sub b)
     | TypeVar nm when (nm = vname) -> tvl
     | Deferred t -> Deferred (sub t)
-    | TypeOp (n, ts, p) -> TypeOp (n, ts |> List.map sub, p)
-    | Variant (n, ts, cts) -> Variant (n, ts |> List.map sub, cts |> List.map (fun (n, targs) ->  (n, targs |> List.map sub)))
-    | Scheme (tvs, t) -> Scheme (tvs, sub t)
+    | DataType (n, ts, cts, s, h) -> 
+      DataType (n, ts |> List.map sub, cts |> List.map (fun (n, targs) ->  (n, targs |> List.map sub)), s, h)
+    | Scheme (tvs, sbs, t) -> Scheme (tvs, sbs, sub t)
     | x -> x
   in sub tsbj
 
-// Assign -> Type -> Type
-let substAll ss tsbj =
-  ss
-    |> asgn_Extract
-    |> Map.fold (fun ts name tnsbj -> tnsbj |> substIn name ts) tsbj 
+// t {i} |> replaceStage "i" s
+// --> t {j}
+let replaceStage vname stage isRight t =
+  let rec sub = function
+    | Fun (a, b) -> Fun (sub a, sub b)
+    | Deferred t -> Deferred (sub t)
+    | DataType (n, ts, cts, s, h) ->
+      DataType (n, 
+                ts |> List.map sub,
+                cts |> List.map (fun (n, a) -> (n, a |> List.map sub)),
+                (if isRight then s |> Option.map (StageOp.substIn vname stage) else s),
+                h)
+    | Scheme (vs, ss, t) when (isRight && ss |> Map.containsKey vname |> not) ->
+      Scheme (vs, ss |> Map.map (fun _ v -> v |> StageOp.substIn vname stage), sub t)
+    | Scheme (vs, ss, t) when (not isRight) ->
+      match stage with
+        | SVar sv ->
+          Scheme (vs, ss |> Map.map2 (fun (k, v) -> if k = sv then (sv, v) else (k, v)), sub t)
+        | _ -> Scheme (vs, ss, sub t)
+    | Scheme (vs, ss, t) -> Scheme (vs, ss, sub t)
+    | x -> x
+  in sub t
 
-// TyId -> Type -> Constraint list -> Constraint list
-let substInConstraints vname tvl cs =
-  cs |> List.map (fun (Constraint (ta, tb, u)) -> Constraint (tvl |> substIn vname ta, tvl |> substIn vname tb, u))
+let substIn name assign tsbj =
+  match assign with
+    | AType t -> tsbj |> replaceType name t
+    | AStage (s, SARight) -> tsbj |> replaceStage name s true
+    | AStage (s, SALeft) -> tsbj |> replaceStage name s false
+    | _ -> tsbj
 
-let substAllInConstraints asgn cs =
-  asgn
-    |> asgn_Extract
-    |> Map.fold (fun c name t -> c |> substInConstraints name t) cs
+let substAll asins t =
+  asins |> Map.fold (fun tsbj n a -> tsbj |> substIn n a) t
+
+let substInConstraints name assign cs =
+  let f = function
+    | CTypeEq (ta, tb, u) -> CTypeEq (ta |> substIn name assign, tb |> substIn name assign, u)
+    | CStageLte (StageInequality (s, t), u, v, w) ->
+      let u = u |> substIn name assign in
+      let v = v |> substIn name assign in
+      match assign with
+        | AStage (a, SALeft)  -> CStageLte (StageInequality (s |> StageOp.substIn name a, t), u, v, w)
+        | AStage (a, SARight) -> CStageLte (StageInequality (s, t |> StageOp.substIn name a), u, v, w)
+        | _ -> CStageLte (StageInequality (s, t), u, v, w)
+  in cs |> List.map f
+
+let substAllInConstraints asins cs =
+  asins |> Map.fold (fun c n a -> c |> substInConstraints n a) cs
+
+let addForall ctx cstr t =
+  let btvs = 
+    ctx |> toTyperMap
+        |> List.map (snd >> fvOf)
+        |> List.fold Set.union (set [])
+  in
+  let bsvs =
+    ctx |> toTyperMap
+        |> List.map (snd >> fsvOf)
+        |> List.fold Set.union (set [])
+  in
+  let tvars = 
+    t |> fvOf
+      |> Set.filter (fun y -> btvs |> Set.contains y |> not)
+  in
+  let svars =
+    t |> fsvOf
+      |> Set.filter (fun y -> bsvs |> Set.contains y |> not)
+      |> Set.toList
+      |> List.map (fun x ->
+                     let f = function
+                       | CStageLte (StageInequality (SVar x', sy), _, _, _) when x = x' -> Some (x, sy)
+                       | _ -> None
+                     in
+                     match (cstr |> List.choose f) with
+                       | [] -> [(x, SInf)]
+                       | bs -> bs
+                  )
+      |> List.concat
+      |> Map.ofList
+  in
+  if (Set.isEmpty tvars && Map.isEmpty svars) then 
+    t
+  else
+    Scheme (tvars, svars, t)
 
 let rec removeForall = function
-  | Scheme (_, t) -> removeForall t
+  | Scheme (_, _, t) -> removeForall t
   | t -> t
 
-let prettify uniq ts =
-  let rec getTyNames = function
+let getNames t = 
+  let rec gt = function
     | TypeVar n -> set [n]
-    | Fun (a, b) -> Set.union (getTyNames a) (getTyNames b)
-    | Deferred t -> getTyNames t
-    | Variant (_, ts, _)
-    | TypeOp (_, ts, _) -> ts |> List.map getTyNames |> List.fold Set.union (set [])
-    | Scheme (vs, t) -> getTyNames t |> Set.union vs
+    | Fun (a, b) -> Set.union (gt a) (gt b)
+    | Deferred t -> gt t
+    | DataType (_, ts, cts, _, _) ->
+      cts |> List.map snd |> List.concat |> List.append ts 
+          |> List.map gt |> List.fold Set.union (set [])
+    | Scheme (vs, _, t) -> gt t |> Set.union vs
     | _ -> set []
   in
-  let (fvs, ts) =
+  let rec gs = function
+    | Scheme (_, ss, t) -> gs t |> Set.union (ss |> Map.keys)
+    | DataType (_, ts, cts, s, _) ->
+      cts |> List.map snd |> List.concat |> List.append ts
+          |> List.map gs |> List.fold Set.union (s |> Option.map StageOp.fvOf ?| set [])
+    | Fun (a, b) -> Set.union (gs a) (gs b)
+    | Deferred t -> gt t
+    | _ -> set []
+  in
+  (gt t, gs t)
+
+let prettify uniq ts =
+  let (ftvs, fsvs, ts) =
     let f t =
-      let fv = getTyNames t in
+      let (ftv, fsv) = getNames t in
+      (*
       let t =
-        if (Set.count fv > 0) then
-          Scheme (fv, t)
-        else
+        if (Set.isEmpty ftv && Set.isEmpty fsv) then
           t
-      in (fv, t)
+        else
+          Scheme (ftv, fsv, t)
+      in *)
+      (ftv, fsv, t)
     in
     ts |> List.map f
-       |> List.fold (fun (fvs, ts) (fv, t) -> (Set.union fvs fv, t :: ts)) (Set.empty, [])
-       |> (fun (x, y) -> (x, List.rev y))
+       |> List.fold (fun (ftvs, fsvs, ts) (ftv, fsv, t) -> (Set.union ftvs ftv, Set.union fsvs fsv, t :: ts)) (Set.empty, Set.empty, [])
+       |> (fun (x, y, z) -> (x, y, List.rev z))
   in
-  let rec rename m = function
-    | Scheme (vs, t) ->
-      Scheme (vs |> Set.map (fun x -> m |> Map.tryFind x ?| x), rename m t) 
-    | x -> x |> substAll (m |> Map.map (fun _ v -> TypeVar v) |> Assign)
-  let ftmap = fvs |> Set.map (fun x -> (x, x + "+")) |> Set.toList |> Map.ofList in
-  let ts' = ts |> List.map (rename ftmap) in
-  let (us, uniq) = fvs |> Set.count |> genUniqs uniq in
-  let newmap = fvs |> Set.toList |> List.map2 (fun y x -> (x + "+", y)) us |> Map.ofList in
-  (ts' |> List.map (rename newmap), uniq)
-
+  let rec rename mt ms = function
+    | Scheme (vs, ss, t) ->
+      Scheme (vs |> Set.map (fun x -> mt |> Map.tryFind x ?| x),
+              ss |> Map.map2 (fun (k, v) -> (ms |> Map.tryFind k ?| k, 
+                                             ms |> Map.fold (fun s k v -> s |> StageOp.substIn k (SVar v)) v)),
+              rename mt ms t)
+    | x -> x |> substAll (mt |> Map.map (fun _ v -> TypeVar v |> AType)) 
+             |> substAll (ms |> Map.map (fun _ v -> AStage (SVar v, SARight)))
+  let ftmap = ftvs |> Set.map (fun x -> (x, x + "+")) |> Set.toList |> Map.ofList in
+  let fsmap = fsvs |> Set.map (fun x -> (x, x + "+")) |> Set.toList |> Map.ofList in
+  let ts' = ts |> List.map (rename ftmap fsmap) in
+  let (us, uniq) = ftvs |> Set.count |> genUniqs uniq in
+  let (vs, uniq) = fsvs |> Set.count |> genUniqs uniq in
+  let newtmap = ftvs |> Set.toList |> List.map2 (fun y x -> (x + "+", y)) us |> Map.ofList in
+  let newsmap = fsvs |> Set.toList |> List.map2 (fun y x -> (x + "+", y)) vs |> Map.ofList in
+  (ts' |> List.map (rename newtmap newsmap), uniq)
 
 let prettify1 a =
   match (prettify 0 [a]) with
@@ -96,13 +193,26 @@ let prettify2 (a, b) =
     | ([a'; b'], _) -> (a', b')
     | _ -> failwith "impossible_prettify2"
 
-let rename u vs f t =
-  let (nvs, u') = vs |> List.length |> genUniqs u in
+
+let rename u vs ss f t =
+  let (nvs, u) = vs |> List.length |> genUniqs u in
+  let (nus, u) = ss |> List.length |> genUniqs u in
   let qvs = vs |> List.map ((+) "_rename") in
-  let genasgn xs ys =
-    List.map2 (fun x y -> (x, TypeVar y)) xs ys |> Map.ofList |> Assign
+  let qus = ss |> List.map ((+) "_rename") in
+  let genasgn xs ys xs' ys' =
+    let mt = List.map2 (fun x y -> (x, AType (TypeVar y))) xs ys in
+    let ms = List.map2 (fun x y -> (x, AStage (SVar y, SARight))) xs' ys' in
+    List.append mt ms |> Map.ofList
   in
-  (t |> f (substAll (genasgn vs qvs)) |> f (substAll (genasgn qvs nvs)), u')
+  let genst xs ys s =
+    List.map2 (fun x y -> StageOp.substIn x (SVar y)) xs ys |> List.fold (fun x f -> f x) s
+  in
+  let geng xs ys xs' ys' s =
+    let c = List.zip xs ys <+> List.zip xs' ys' in
+    c |> Map.ofList |> Map.tryFind s ?| s
+  in
+  (t |> f (substAll (genasgn vs qvs ss qus), genst ss qus, geng vs qvs ss qus) 
+     |> f (substAll (genasgn qvs nvs qus nus), genst qus nus, geng qvs nvs qus nus), u)
 
 
 type FailureReason =
@@ -118,35 +228,50 @@ exception TyperFailed of FailureReason
 
 // Constraint list -> Constraint list
 let unify cs =
-  let cstrmap f xs =
-    xs |> List.map Constraint |> f |> List.map cstr_Extract
-  in
-  let rec u cs' = 
-    match cs' with
-      | (s, t, _) :: rest when (s = t) -> u rest
-      | (s, TypeVar tn, x) :: rest
-      | (TypeVar tn, s, x) :: rest when (s |> hasTyVar tn |> not) ->
-        List.append (cs' |> cstrmap (substInConstraints tn s) |> u) [ (TypeVar tn, s, x) ]
-      | (Variant (n, lts, lcts), TypeOp (m, rts, _), t) :: rest
-      | (TypeOp (m, rts, _), Variant (n, lts, lcts), t) :: rest when (n = m && List.length lts = List.length rts) ->
-        match (Variant (n, lts, lcts) |> isInductive) with
-          | Some true -> rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-          | Some false ->
-            let (l, r) = prettify2 (Variant (n, lts, lcts), TypeOp (m, rts, Value None)) in
-            UnifyFailed (l, r, t) |> TyperFailed |> raise
-          | None -> Variant (n, lts, lcts) |> prettify1 |> NotInductive |> TyperFailed |> raise
-      | (Fun (a1, b1), Fun (a2, b2), f) :: rest ->
-        u ((a1, a2, f) :: (b1, b2, f) :: rest)
-      | (Deferred a, Deferred b, d) :: rest ->
-        u ((a, b, d) :: rest)
-      | (Variant (lname, lts, _), Variant (rname, rts, _), t) :: rest
-      | (TypeOp (lname, lts, _), TypeOp (rname, rts, _), t) :: rest when (lname = rname && List.length lts = List.length rts) ->
-        rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-      | (s, t, u) :: rest ->
-        let (s', t') = prettify2 (s, t) in
-        UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
-      | [] -> []
-  in u (cs |> List.map cstr_Extract) |> List.map Constraint
+  let rec u = function
+    | CTypeEq (s, t, _) :: rest when (s = t) -> u rest
+    | CTypeEq (s, TypeVar tn, x) :: rest
+    | CTypeEq (TypeVar tn, s, x) :: rest when (s |> hasTyVar tn |> not) ->
+      List.append (rest |> substInConstraints tn (AType s) |> u) [ CTypeEq (TypeVar tn, s, x) ]
+    | (CTypeEq (DataType (m, rts, _, sm, _), DataType (n, lts, _, sn, _), t) :: rest & CTypeEq (tl, tr, _) :: _) when (n = m && List.length lts = List.length rts) ->
+      let ams = sm |> Option.map2 (fun m n -> [ CStageLte (StageInequality (m, n), tl, tr, t); CStageLte (StageInequality (n, m), tr, tl, t) ]) sn ?| [] in
+      ams <+> rest |> List.append (List.map2 (fun x y -> CTypeEq (x, y, t)) lts rts) |> u
+    | CTypeEq (Fun (a1, b1), Fun (a2, b2), f) :: rest ->
+      u (CTypeEq (a1, a2, f) :: CTypeEq (b1, b2, f) :: rest)
+    | CTypeEq (Deferred a, Deferred b, d) :: rest ->
+      u (CTypeEq (a, b, d) :: rest)
+    | CTypeEq (s, t, u) :: rest ->
+      let (s', t') = prettify2 (s, t) in
+      UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
+    | CStageLte (StageInequality (sl, sr), tl, tr, tm) :: rest ->
+      let si = StageInequality (sl, sr) in
+      let csli l r = CStageLte (StageInequality (l, r), tl, tr, tm) in
+      let csl si = CStageLte (si, tl, tr, tm) in
+      match (sl, sr) with
+        | (sx, sy) when sx = sy -> rest |> u
+        | (SSucc sx, SSucc sy) ->  csli sx sy :: rest |> u
+        | (SVar x, sy) when (StageOp.fvOf sy |> Set.contains x |> not) ->
+          match (StageOp.check si) with
+            | Some xs ->
+              let cs = List.append (xs |> List.map csl) rest |> substInConstraints x (AStage (sy, SARight)) in
+              [si |> StageOp.bimap StageOp.prettify |> csl] |> List.append (cs |> u)
+            | None -> UnifyFailed (tl, tr, tm) |> TyperFailed |> raise
+        | (sx, SVar y) when (StageOp.fvOf sx |> Set.contains y |> not) ->
+          match (StageOp.check si) with
+            | Some xs ->
+              let cs = List.append (xs |> List.map csl) rest |> substInConstraints y (AStage (sx, SALeft)) in
+              [si |> StageOp.bimap StageOp.prettify |> csl] |> List.append (cs |> u)
+            | None -> UnifyFailed (tl, tr, tm) |> TyperFailed |> raise
+        | (SVar _, _) -> (si |> StageOp.bimap StageOp.prettify |> csl) :: (rest |> u)
+        | (_, SVar _) -> UnifyFailed (tl, tr, tm) |> TyperFailed |> raise
+        | (_, _) ->
+          match (StageOp.check si) with
+            | Some xs ->
+              let cs = List.append (xs |> List.map csl) rest in
+              [si |> StageOp.bimap StageOp.prettify |> csl] |> List.append (cs |> u) 
+            | None -> UnifyFailed (tl, tr, tm) |> TyperFailed |> raise
+    | [] -> []
+  in u cs
 
 // Context -> Type list -> UniqId -> Term -> (Term * Type * UniqId * Constraint list)
 let rec recon ctx stack uniq term =
@@ -161,23 +286,28 @@ let rec recon ctx stack uniq term =
   match term with
     | UTmFreeVar vn ->
       match (ctx |> typerFind vn) with
-        | Some (Scheme (vs, t)) ->
-          let (t',uniq) = t |> rename uniq (vs |> Set.toList) id in
-          (term, t', uniq, [])
+        | Some (Scheme (vs, ss, t)) ->
+          let f (ft, fs, fg) (ty, ss) =
+            (ft ty, ss |> Map.map2 (fun (k, v) -> (fg k, fs v)))
+          in
+          let ((t, ss), uniq) = (t, ss) |> rename uniq (vs |> Set.toList) (ss |> Map.keys |> Set.toList) f in
+          let cstr = ss |> Map.toList |> List.map (fun (k, v) -> CStageLte (StageInequality (SVar k, v), t, t, term)) in
+          (term, t, uniq, cstr)
         | Some t -> (term, t, uniq, [])
         | None -> 
           match (ctx |> findConstructor vn None) with
             // constructor as a function
-            | Some (Variant (name, targs, cts), ctargs) ->
+            | Some (DataType (name, targs, cts, s, h), ctargs) ->
               let tprms = targs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
-              let ((targs', cts', ctargs'), uniq) = (targs, cts, ctargs) |> rename uniq tprms (fun f (x, y, z) -> (x |> List.map f, y |> List.map (fun (n, t) -> (n, t |> List.map f)), z |> List.map f)) in
+              let sprms = s |> Option.map (StageOp.fvOf >> Set.toList) ?| [] in
+              let ((vt, ctargs'), uniq) = (DataType (name, targs, cts, s, h), ctargs) |> rename uniq tprms sprms (fun (f, _, _) (x, y) -> (f x, y |> List.map f)) in
               let (argt, isone) = 
                 if (ctargs' |> List.length = 1) then
                   (ctargs'.[0], true)
                 else
                   (TTuple ctargs', false)
               in
-              let typ = (Fun (argt, Variant (name, targs', cts'))) in
+              let typ = (Fun (argt, vt)) in
               let con = ExternalFun vn typ (function
                   | x :: _ when isone -> UTmConstruct (vn, [x])
                   | UTmConstruct ("*", xs) :: _ -> UTmConstruct (vn, xs)
@@ -198,13 +328,20 @@ let rec recon ctx stack uniq term =
       let (u, uniq) = genUniq uniq in
       let (body', t, uniq, cstr) = recon ctx ((TypeVar u) :: stack) uniq body in
       let (v, uniq) = genUniq uniq in
-      (UTmFun body', TypeVar v, uniq, cstr <+> Constraint (TypeVar v, Fun (TypeVar u, t), UTmFun body') :: [])
+      (UTmFun body', TypeVar v, uniq, cstr <+> CTypeEq (TypeVar v, Fun (TypeVar u, t), UTmFun body') :: [])
 
     | UTmConstruct (n, args) ->
       match (ctx |> findConstructor n (Some args)) with
-        | Some (Variant (name, vtargs, cts), _) ->
+        | Some (DataType (name, vtargs, cts, s, h), _) ->
           let vtprms = vtargs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
-          let ((vtargs', cts'), uniq) = (vtargs, cts) |> rename uniq vtprms (fun f (x, y) -> (x |> List.map f, y |> List.map (fun (n, t) -> (n, t |> List.map f)))) in
+          let vsprms = s |> Option.map (StageOp.fvOf >> Set.toList) ?| [] in
+          let f (ft, fs, _) (vas, cts, st) =
+            (vas |> List.map ft,
+             cts |> List.map (fun (n, t) -> (n, t |> List.map ft)),
+             st |> Option.map fs
+            )
+          in
+          let ((vtargs', cts', s'), uniq) = (vtargs, cts, s) |> rename uniq vtprms vsprms f in
           let ctargs =
             cts' |> List.find (fun (nm, _) -> nm = n) |> snd
           in
@@ -212,10 +349,12 @@ let rec recon ctx stack uniq term =
           let vcstrs =
             targs
               |> List.map2 (fun x y -> (x, y)) ctargs
-              |> List.map2 (fun x (y, z) -> Constraint (y, z, x)) args'
+              |> List.map2 (fun x (y, z) -> CTypeEq (y, z, x)) args'
           in
+
+          let vt = DataType (name, vtargs', cts', s', h) in
           let (u, uniq) = genUniq uniq in
-          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs <+> cstrs <+> Constraint (TypeVar u, Variant (name, vtargs', cts'), UTmConstruct (n, args')) :: [])
+          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs <+> cstrs <+> CTypeEq (TypeVar u, vt, UTmConstruct (n, args')) :: [])
         | _
         | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
     
@@ -230,11 +369,13 @@ let rec recon ctx stack uniq term =
       let (l', tl, uniq, cstr1) = recon ctx stack uniq l in
       let (rs', trs, uniq, cstr2) = multiRecon uniq rs in
       let (nv, uniq) = genUniq uniq in
-      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 <+> cstr1 <+> Constraint (tl, foldFun trs (TypeVar nv), UTmApply (l', rs')) :: [])
+      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 <+> cstr1 <+> CTypeEq (tl, foldFun trs (TypeVar nv), UTmApply (l', rs')) :: [])
 
     | UTmLiteral l -> 
       match l with
-        | LNat _ -> (term, Nat, uniq, [])
+        | LNat _ ->
+          let (v, uniq) = genUniq uniq in
+          (term, NatS (SVar v), uniq, [])
         | LBool _ -> (term, Bool, uniq, [])
         | LUnit -> (term, Unit, uniq, [])
    
@@ -242,30 +383,18 @@ let rec recon ctx stack uniq term =
       let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value in
       let cstr1' = unify cstr1 in
       let tvalue' = tvalue |> substAll (cstr_toAsgn cstr1') in
-      let fvs = 
-        ctx |> toTyperMap
-            |> List.map (fun (_, t) -> fvOf t |> Set.toList)
-            |> List.concat
-      in
-      let tvars = 
-        tvalue' |> fvOf
-                |> Set.toList
-                |> List.filter (fun y -> fvs |> List.contains y |> not)
-      in
-      let tx = if (List.length tvars > 0) then Scheme (tvars |> Set.ofList, tvalue') else tvalue' in
+      let tx = tvalue' |> addForall ctx cstr1' in
       let ctx' = ctx |> typerAdd x tx in
       let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body in
-
       let tbody' = tbody |> substAll (cstr1 <+> cstr2 |> unify |> cstr_toAsgn) in
-
       let (r, uniq) = genUniq uniq in
-      (UTmLet (x, value', body'), TypeVar r, uniq, cstr1 <+> cstr2 <+> Constraint (TypeVar r, tbody, UTmLet (x, value', body')) :: [])
+      (UTmLet (x, value', body'), TypeVar r, uniq, cstr1 <+> cstr2 <+> CTypeEq (TypeVar r, tbody, UTmLet (x, value', body')) :: [])
    
     | UTmLetDefer (x, value, body) ->
       let (nv, uniq) = genUniq uniq in
       let (value', tvalue, uniq, cstr) = recon ctx stack uniq value in
       let (mv, uniq) = genUniq uniq in
-      let cstr' = cstr <+> Constraint (Deferred (TypeVar nv), tvalue, value') :: Constraint (TypeVar mv, Deferred (TypeVar nv), value') :: [] in
+      let cstr' = cstr <+> CTypeEq (Deferred (TypeVar nv), tvalue, value') :: CTypeEq (TypeVar mv, Deferred (TypeVar nv), value') :: [] in
       let (lv, uniq) = genUniq uniq in
       let (body', tbody, uniq, cstr2) = recon (ctx |> typerAdd x (TypeVar lv)) stack uniq body in
       let cstr2' = cstr2 <+> cstr' in
@@ -277,14 +406,14 @@ let rec recon ctx stack uniq term =
       let dt = Deferred (TypeVar nv) in
       let (x', tx, uniq, cstr) = recon ctx stack uniq x in
       let (mv, uniq) = genUniq uniq in
-      (UTmDefer x', TypeVar mv, uniq, cstr <+> Constraint (TypeVar nv, tx, UTmDefer x') :: Constraint (TypeVar mv, dt, UTmDefer x') :: [])
+      (UTmDefer x', TypeVar mv, uniq, cstr <+> CTypeEq (TypeVar nv, tx, UTmDefer x') :: CTypeEq (TypeVar mv, dt, UTmDefer x') :: [])
     
     | UTmRun x ->
       let (nv, uniq) = genUniq uniq in
       let dt = Deferred (TypeVar nv) in
       let (x', tx, uniq, cstr) = x |> recon ctx stack uniq in
       let (mv, uniq) = genUniq uniq in
-      (UTmRun x', TypeVar mv, uniq, cstr <+> Constraint (dt, tx, UTmRun x) :: Constraint (TypeVar mv, TypeVar nv, UTmRun x') :: [])
+      (UTmRun x', TypeVar mv, uniq, cstr <+> CTypeEq (dt, tx, UTmRun x) :: CTypeEq (TypeVar mv, TypeVar nv, UTmRun x') :: [])
 
     | UTmExternal (_, t) ->
       (term, t, uniq, [])
@@ -304,18 +433,16 @@ let rec recon ctx stack uniq term =
       let (bs', tbs, uniq, css) = 
         let f = 
           cases 
-            |> List.map (fun (pat, body) ->
+            |> List.foldBack (fun (pat, body) (bs', tbs, u, css) ->
                 if (isValidAsPattern pat |> not) then
                   TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
                 else
-                  match (ctx |> bindPattern pat a) with
-                    | Some stack' -> 
-                      (List.append stack' stack, body)
+                  match (bindPattern pat a ctx u) with
+                    | Some (stack', cstr, uniq) -> 
+                      let stack = List.append stack' stack in
+                      let (body', tbody, uniq, bcstr) = recon ctx stack uniq body in
+                      (body' :: bs', tbody :: tbs, uniq, bcstr <+> cstr <+> css)
                     | None -> NotMatchable (pat, a, body) |> TyperFailed |> raise
-              )
-            |> List.foldBack (fun (st, b) (bs', tbs, u, css) ->
-                let (b', tb, u', cs) = recon ctx st u b in
-                (b' :: bs', tb :: tbs, u', List.append cs css)
               )
         in f ([], [], uniq, [])
       in
@@ -323,9 +450,9 @@ let rec recon ctx stack uniq term =
       let (b, uniq) = genUniq uniq in
       let b = TypeVar b in
       let bcstr =
-        tbs |> List.map2 (fun x t -> Constraint (b, t, x)) bs'
+        tbs |> List.map2 (fun x t -> CTypeEq (b, t, x)) bs'
       in
-      let cstrs = cstr <+> css <+> bcstr <+> Constraint (tv, a, v') :: [] in
+      let cstrs = cstr <+> css <+> bcstr <+> CTypeEq (tv, a, v') :: [] in
       (term', b, uniq, cstrs)
     
     | UTmFixMatch cases ->
@@ -344,7 +471,7 @@ let rec recon ctx stack uniq term =
       match mth with
         | UTmMatch (_, cases) ->
           verifyTermination cases |> ignore;
-          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 <+> Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: Constraint (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
+          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 <+> CTypeEq (tthis, Fun (targ', tmth), UTmFixMatch cases) :: CTypeEq (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
         | _ ->
           failwith "impossible_UFixMatch"
 
@@ -399,36 +526,40 @@ and reconFromPatterns mth ctx uniq =
   let rec gh uq pat =
     match pat with
       | UTmConstruct (x, ys) ->
-        let (name, targs, cts, ctargs, nq) =
+        let (name, targs, cts, ctargs, nq, s, h) =
           match (ctx |> findConstructor x (Some ys)) with
-            | Some (Variant (name, targs, cts), ctargs) ->
+            | Some (DataType (name, targs, cts, s, h), ctargs) ->
               let tprms = targs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
-              let ((targs', cts', ctargs'), uniq) = 
-                (targs, cts, ctargs) |> rename uq tprms (fun f (x, y, z) -> 
+              let sprms = s |> Option.map (StageOp.fvOf >> Set.toList) ?| [] in
+              let ((targs', cts', ctargs', s'), uniq) = 
+                (targs, cts, ctargs, s) |> rename uq tprms sprms (fun (ft, fs, _) (x, y, z, s) -> 
                     (
-                      x |> List.map f,
-                      y |> List.map (fun (n, t) -> (n, t |> List.map f)),
-                      z |> List.map f
+                      x |> List.map ft,
+                      y |> List.map (fun (n, t) -> (n, t |> List.map ft)),
+                      z |> List.map ft,
+                      s |> Option.map fs
                     )
                   )
               in
-              (name, targs', cts', ctargs', uniq)
+              (name, targs', cts', ctargs', uniq, s', h)
             | _
             | None -> UnknownVar (x, ctx) |> TyperFailed |> raise
         in
         let (fnq, pts) = ys |> List.fold (fun (u, ts) y -> let (nu, nt) = gh u y in (nu, nt :: ts)) (nq, []) in
         let asgn = 
           ctargs |> List.rev
-                 |> List.map2 (fun y -> (function | TypeVar x -> Some (x, y) | _ -> None)) pts 
-                 |> List.choose id |> Map.ofList |> Assign 
+                 |> List.map2 (fun y -> (function | TypeVar x -> Some (x, AType y) | _ -> None)) pts 
+                 |> List.choose id |> Map.ofList 
         in
-        let vt = Variant (name, targs, cts) |> substAll asgn in
+        let vt = DataType (name, targs, cts, s, h) |> substAll asgn in
         (fnq, vt)
       | UTmTuple xs ->
         let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
         (nq, TTuple (ts |> List.rev))
       | UTmLiteral LUnit -> (uq, Unit)
-      | UTmLiteral (LNat _) -> (uq, Nat)
+      | UTmLiteral (LNat _) -> 
+        let (v, uq) = genUniq uq in
+        (uq, NatS (SVar v))
       | UTmLiteral (LBool _) -> (uq, Bool)
       | UTmFreeVar "_"
       | UTmBoundVar _ ->
@@ -438,7 +569,7 @@ and reconFromPatterns mth ctx uniq =
   in
   let (uniq, ts) = pats |> List.map fst |> List.fold (fun (u, ts) p -> let (nu, t) = gh u p in (nu, t :: ts)) (uniq, []) in
   let cstr =
-    ts |> List.map (fun t -> Constraint (TypeVar a, t, mth))
+    ts |> List.map (fun t -> CTypeEq (TypeVar a, t, mth))
   in 
   let rt = TypeVar a |> substAll (unify cstr |> cstr_toAsgn) in
   exhaustiveCheck (pats |> List.map fst) rt ctx;
@@ -454,30 +585,54 @@ and isValidAsPattern = function
   | UTmTuple xs -> xs |> List.forall isValidAsPattern
   | _ -> false
 
-and bindPattern pat t ctx =
-  let rec bt pat t =
+and bindPattern pat t ctx uniq =
+  let rec bt pat t uniq =
     match (pat, t) with
-      | (UTmConstruct (n, xs), TypeOp (name, ts, _)) ->
+      | (UTmConstruct (n, xs), DataType (name, ts, _, so, h)) ->
         match (ctx |> findType name) with
-          | Some (Variant (name, vts, cts)) ->
-            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
-            let cts' = cts |> List.map (fun (cn, ct) -> (cn, ct |> List.map (substAll asgn))) in
-            bt (UTmConstruct (n, xs)) (Variant (name, ts, cts'))
+          | Some (DataType (_, vts, cts, _, _)) ->
+            let (ns, cstr, uniq) = 
+              match so with
+                | Some s ->
+                  let (nsv, uniq) = genUniq uniq in
+                  (Some (SVar nsv), [CStageLte (SSucc (SVar nsv) <=^ s, t, t, pat); CStageLte (s <=^ SSucc (SVar nsv), t, t, pat)], uniq)
+                | None when (isInductive t ?| false) ->
+                  let (nsv, uniq) = genUniq uniq in
+                  (Some (SVar nsv), [], uniq)
+                | None -> (None, [], uniq)
+            in
+            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, AType x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList in
+            let cts' = cts |> List.map (fun (cn, ct) -> 
+                                          (cn, 
+                                           ct |> List.map (function 
+                                                             | DataType (nm, ts, _, _, h) when (isInductive t ?| false && nm = name) -> DataType (name, ts, [], ns, h)
+                                                             | t -> t
+                                                          )
+                                              |> List.map (substAll asgn)))
+            in
+            let ts = cts' |> List.find (fst >> ((=) n)) |> snd in
+            ts |> List.zip xs
+               |> List.fold (fun (bs, cs, u) (pt, ty) ->
+                               let (b', c', u) = bt pt ty u in
+                               (bs <+> b', cs <+> c', u)
+                            ) ([], cstr, uniq)
           | _ -> failwith "impossible_bindPattern"
-      | (UTmConstruct (n, xs), Variant (_, _, cts)) when (cts |> List.exists (fun (m, ts) -> m = n && List.length xs = List.length ts)) ->
-        let ts = cts |> List.find (fst >> ((=) n)) |> snd in
-        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UTmTuple xs, TypeOp("*", ts, _)) when (List.length xs = List.length ts) ->
-        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
+      | (UTmTuple xs, DataType ("*", ts, _, _, _)) when (List.length xs = List.length ts) ->
+        ts |> List.zip xs
+           |> List.fold (fun (bs, cs, u) (pt, ty) ->
+                           let (b', c', u)  = bt pt ty u in
+                           (bs <+> b', cs <+> c', u)
+                        ) ([], [], uniq)
       | (UTmFreeVar "_", _)
       | (UTmLiteral LUnit, Unit)
-      | (UTmLiteral (LNat _), Variant ("Nat", _, _))
-      | (UTmLiteral (LBool _), Bool) -> []
-      | (UTmBoundVar x, t) -> [ (x, t) ]
+      | (UTmLiteral (LNat _), DataType ("Nat", _, _, _, _))
+      | (UTmLiteral (LBool _), Bool) -> ([], [], uniq)
+      | (UTmBoundVar x, t) -> ([(x, t)], [], uniq)
       | _ -> failwith "bindfailed"
   in
   try
-    bt pat t |> List.map snd |> Some
+    let (bs, cstr, uniq) = bt pat t uniq in 
+    Some (bs |> List.sortBy fst |> List.map snd, cstr, uniq)
   with
     | _ -> None
 
@@ -494,7 +649,7 @@ and getInductionDepth ptns ctx =
   let rec gett = function
     | UTmConstruct (x, ys) ->
       match (ctx |> findConstructor x (Some ys)) with
-        | Some (Variant (name, _, _), _) -> (name, 1) <+> (ys |> List.map gett |> concat)
+        | Some (DataType (name, _, _, _, _), _) -> (name, 1) <+> (ys |> List.map gett |> concat)
         | _ -> Map.empty
     | UTmFreeVar "_"
     | UTmBoundVar _ -> Map.empty
@@ -522,30 +677,28 @@ and exhaustiveCheck ptns t ctx =
       | None -> mp
   in
   let rec genReq mp = function
-    | Variant (vname, _, cts) ->
-      cts |> List.map (fun (name, args) ->
-              args |> List.map (genReq (mp |> next vname))
-                   |> cartProd
-                   |> (function 
-                        | [] -> [ UTmConstruct (name, []) ]
-                        | x -> x |> List.map (fun xs -> UTmConstruct (name, xs))
-                      )
-             ) 
-          |> List.concat
-    | TypeOp ("*", ts, _) ->
+    | DataType ("*", ts, _, _, _) ->
       ts |> List.map (genReq mp) |> cartProd |> List.map UTmTuple
-    | Unit -> [ UTmLiteral LUnit ]
-    | Bool -> [ UTmLiteral (LBool true); UTmLiteral (LBool false)]
-    | TypeOp (name, ts, _) ->
+    | DataType (name, ts, _, _, _) ->
       match (ctx |> findType name) with
-        | Some (Variant (name, vts, cts)) ->
-          if (mp |> Map.containsKey name) then
-            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
-            let cts' = cts |> List.map (fun (cn, ct) -> (cn, ct |> List.map (substAll asgn))) in
-            genReq mp (Variant (name, vts, cts'))
+        | Some (DataType (vname, vts, cts, _ ,_)) ->
+          if (mp |> Map.containsKey vname) then
+            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, AType x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList in
+            let cts = cts |> List.map (fun (cn, ct) -> (cn, ct |> List.map (substAll asgn))) in
+            cts |> List.map (fun (name, args) ->
+                     args |> List.map (genReq (mp |> next vname))
+                          |> cartProd
+                          |> (function 
+                               | [] -> [ UTmConstruct (name, []) ]
+                               | x -> x |> List.map (fun xs -> UTmConstruct (name, xs))
+                             )
+                   ) 
+                |> List.concat
           else
             [ UTmFreeVar "_" ]
         | _ -> failwith "impossible_exhaustivenessCheck"
+    | Unit -> [ UTmLiteral LUnit ]
+    | Bool -> [ UTmLiteral (LBool true); UTmLiteral (LBool false)]
     | TypeVar _ -> [ UTmFreeVar "_" ] // only matched with variable patterns
     | _ -> []
   in
@@ -561,17 +714,14 @@ and exhaustiveCheck ptns t ctx =
   else
     ()
   
-let solve t cstr =
-  let cstr' = unify cstr in
-  t |> substAll (cstr_toAsgn cstr')
-
 let inferWithContext ctx term =
   let (term', t, _, cstr) = recon ctx [] 0 term in
-  (term', solve t cstr |> prettify1)
-
-let inferWithAnnotation ctx term typ =
-  let (term', t, _, cstr) = recon ctx [] 0 term in
-  (term', solve t (Constraint (t, typ, term') :: cstr) |> prettify1)
+  let cstr' = unify cstr in
+  let t' = t |> substAll (cstr_toAsgn cstr') |> prettify1 |> addForall ctx cstr' in
+  cstr |> List.iter (printfn "%O");
+  printfn "-------";
+  cstr' |> List.iter (printfn "%O");
+  (term', t')
 
 let infer term =
   inferWithContext [] term

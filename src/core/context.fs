@@ -14,7 +14,7 @@ type Context = ContextItem list
 let printContext ctx =
   for x in ctx do
     match x with
-      | TypeContext (Variant (name, targs, cts)) ->
+      | TypeContext (DataType (name, targs, cts, _, _)) when (List.isEmpty cts |> not) ->
         let s = List.concat [targs |> List.map to_s; [name]] |> String.concat " " in
         let cs = 
           cts |> List.map ((fun (n, ts) -> 
@@ -28,16 +28,16 @@ let printContext ctx =
       | _ -> ()
 
 let findType name ctx =
-  ctx |> List.choose (function | TypeContext (Variant (vs, ts, cts)) when vs = name -> Variant (vs, ts, cts) |> Some | _ -> None) |> List.tryHead
+  ctx |> List.choose (function | TypeContext (DataType (vs, ts, cts, st, h)) when vs = name -> DataType (vs, ts, cts, st, h) |> Some | _ -> None) |> List.tryHead
 
 let findConstructor<'a> name (args : 'a list option) ctx =
   let al = args |> Option.map List.length in
   ctx 
     |> List.choose (function 
-        | TypeContext (Variant (vs, targs, ts)) ->
+        | TypeContext (DataType (vs, targs, ts, s, h)) when (List.isEmpty ts |> not) ->
           ts 
             |> List.tryFind (fun (n, xs) -> n = name && (al |> Option.map ((=) (List.length xs)) ?| true))
-            |> Option.map (fun (_, xs) -> (Variant (vs, targs, ts), xs))
+            |> Option.map (fun (_, xs) -> (DataType (vs, targs, ts, s, h), xs))
         | _ -> None
       )
     |> List.tryHead
