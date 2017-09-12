@@ -28,12 +28,15 @@ let DefPolyVariant name targs ts =
 let DefPolyInductiveVariant name targs f =
   TypeContext (InductiveVariant (name, targs |> List.map TypeVar, f, SVar "x"))
 
-let builtinTypes = [
-  DefPolyVariant "Option" ["a"] [ ("Some", [TypeVar "a"]); ("None", []) ];
-  DefPolyVariant "Either" ["a"; "b"] [ ("Left", [TypeVar "a"]); ("Right", [TypeVar "b"]) ];
-  DefInductiveVariant "Nat" (fun self -> [ ("Succ", [self]); ("0", []) ]);
-  DefPolyInductiveVariant "List" ["a"] (fun self -> [ ("Nil", []); ("Cons", [TypeVar "a"; self]) ])
-]
+let builtinTypes = 
+  let inline N x = NewConst x in
+  let inline NR x = NewRecConst x in
+  [
+    DefPolyVariant "Option" ["a"] [ N ("Some", [TypeVar "a"]); N ("None", []) ];
+    DefPolyVariant "Either" ["a"; "b"] [ N ("Left", [TypeVar "a"]); N ("Right", [TypeVar "b"]) ];
+    DefInductiveVariant "Nat" (fun self -> [ NR ("Succ", [self]); N ("0", []) ]);
+    DefPolyInductiveVariant "List" ["a"] (fun self -> [ N ("Nil", []); NR ("Cons", [TypeVar "a"; self]) ])
+  ]
 
 let impossible = UTmLiteral LUnit
 
@@ -87,6 +90,8 @@ let addTerm name term ctx =
   let (t', tt) = inferWithContext ctx term in
   TermContext (name, tt, t') :: ctx
 
+let inline DefSVar n = SVar n <=^ SInf
+
 let builtinTerms = [
   DefRawCode "id" "fun x -> x";
   DefRawTerm "run_" (UTmFun (UTmRun (UTmBoundVar 0)));
@@ -94,20 +99,20 @@ let builtinTerms = [
     | UTmLiteral (LNat x) :: _ -> Environment.Exit(int32 x); UTmLiteral LUnit
     | _ -> impossible
   );
-  DefFun "+" [NatS (SVar "b"); NatS (SVar "c")] (NatS SInf) (function
+  DefPolyFun "+" [] [DefSVar "b"; DefSVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS (SVar "b" +^ SVar "c")) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a + b) |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "*" [NatS (SVar "b"); NatS (SVar "c")] (NatS SInf) (function
+  DefPolyFun "*" [] [DefSVar "b"; DefSVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS SInf) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a * b) |> UTmLiteral
     | _ -> impossible
   );
-  DefPolyFun "%" [] [SVar "d" <=^ SVar "b"; SVar "d" <=^ SVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS (SVar "d")) (function
+  DefPolyFun "%" [] [DefSVar "b"; DefSVar "c"; SVar "d" <=^ SVar "b"; SVar "d" <=^ SVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS (SVar "d")) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a % b) |> UTmLiteral
     | _ -> impossible
   );
   DefRawCode "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
-  DefPolyFun "-?" [] [SVar "d" <=^ SVar "b"] [NatS (SVar "b"); NatS (SVar "c")] (TOption (NatS (SVar "d"))) (function
+  DefPolyFun "-?" [] [DefSVar "b"; DefSVar "c"; SVar "d" <=^ SVar "b"] [NatS (SVar "b"); NatS (SVar "c")] (TOption (NatS (SVar "d"))) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
       if (a > b) then
         UTmConstruct ("Some", [LNat (a - b) |> UTmLiteral])
@@ -127,11 +132,11 @@ let builtinTerms = [
     | UTmLiteral (LBool b) :: _ -> not b |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun ">" [NatS (SVar "b"); NatS (SVar "c")] Bool (function
+  DefFun ">" [Nat; Nat] Bool (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a > b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "<" [NatS (SVar "b"); NatS (SVar "c")] Bool (function
+  DefFun "<" [Nat; Nat] Bool (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a < b) |> LBool |> UTmLiteral
     | _ -> impossible
   );

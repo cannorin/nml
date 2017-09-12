@@ -8,12 +8,49 @@ type Type =
   | Deferred of Type
   | DataType of string 
               * Type list 
-              * (string * Type list) list
+              * Constructor list
               * Stage option
               * EqualityNull<string * Printf.StringFormat<string -> string>>
+  | InductiveSelf of string
   | Scheme of Set<string> * Map<string, Stage> * Type
-  override x.ToString() = sprintf "%A" x
-    
+  override x.ToString() =
+    let rec tos = function
+      | TypeVar n 
+      | InductiveSelf n -> n
+      | Bool -> "Bool" | Unit -> "Unit"
+      | Fun (Fun(a, b), c) -> sprintf "(%s) -> %s" (Fun (a, b) |> tos) (tos c)
+      | Fun (a, b) -> sprintf "%s -> %s" (tos a) (tos b)
+      | Deferred t -> sprintf "<%s>" (tos t)
+      | DataType (name, ts, _, None, Value (s, fmt)) ->
+        sprintf fmt (ts |> List.map tos |> String.concat s)
+      | DataType (name, [], _, Some s, _) ->
+        sprintf "%s[%s]" name (to_s s)
+      | DataType (name, [], _, _, _) -> name
+      | DataType (name, ts, _, None, _) ->
+        sprintf "(%s %s)" (ts |> List.map tos |> String.concat " ") name
+      | DataType (name, ts, _, Some s, _) ->
+        sprintf "(%s %s[%s])" (ts |> List.map tos |> String.concat " ") name (to_s s)
+      | Scheme (ts, ss, t) when (Map.isEmpty ss) ->
+        sprintf "∀%s. (%s)" (ts |> String.concat ", ") (tos t)
+      | Scheme (ts, ss, t) when (Set.isEmpty ts) ->
+        sprintf "∀[%s]. (%s)" (ss |> Map.toList |> List.map (fun (x, y) -> x + " <= " + to_s y) |> String.concat ", ") (to_s t)
+      | Scheme (ts, ss, t) -> 
+        sprintf "∀%s, [%s]. (%s)" 
+                (ts |> String.concat ", ") 
+                (ss |> Map.toList |> List.map (fun (x, y) -> x + " <= " + to_s y) |> String.concat ", ")
+                (tos t)
+    in tos x
+        
+and Constructor =
+  { name: string; args: Type list; isRecursive: bool; }
+  
+
+let NewConst (n, a) =
+  { name = n; args = a; isRecursive = false }
+
+let NewRecConst (n, a) =
+  { name = n; args = a; isRecursive = true }
+
 let TypeOp (name, ts, po) =
   DataType (name, ts, [], None, po)
 
@@ -21,7 +58,7 @@ let Variant (name, ts, cs) =
   DataType (name, ts, cs, None, Null)
 
 let InductiveVariant (n, ts, f, stage) =
-  DataType (n, ts, DataType (n, ts, [], Some stage, Null) |> f, Some (SSucc stage), Null)
+  DataType (n, ts, (InductiveSelf n) |> f, Some stage, Null)
 
 type Literal =
   | LNat of nat

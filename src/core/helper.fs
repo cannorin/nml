@@ -6,19 +6,18 @@ open nml.Stages
 //let TChar = TypeOp ("Char", [], None)
 
 let TTuple ts =
-  TypeOp ("*", ts, Value(" * ", "%s"))
+  TypeOp ("*", ts, Value(" * ", "(%s)"))
 
 let TList a =
-  InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]), SVar "b")
+  InductiveVariant ("List", [a], (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [a; self]) ]), SVar "b")
 
 let TOption a =
-  Variant ("Option", [a], [ ("Some", [a]); ("None", []) ]);
+  Variant ("Option", [a], [ NewConst ("Some", [a]); NewConst ("None", []) ]);
 
 let NatS s =
-  InductiveVariant ("Nat", [], (fun self -> [ ("Succ", [self]); ("0", []) ]), s)
+  InductiveVariant ("Nat", [], (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]), s)
 
-let Nat = NatS (SVar "b")
-
+let Nat = DataType ("Nat", [], [ NewRecConst ("Succ", [InductiveSelf "Nat"]); NewConst ("0", []) ], None, Null)
 
 let matchPattern pat t =
   let rec mt pat t =
@@ -86,7 +85,7 @@ let rec fvOf = function
   | Fun (a, b) -> Set.union (fvOf a) (fvOf b)
   | Deferred t -> fvOf t
   | DataType (_, vs, ts, _, _) -> 
-    ts |> List.map (snd >> (List.map fvOf)) 
+    ts |> List.map (fun c -> c.args |> List.map fvOf) 
        |> List.concat
        |> List.fold Set.union (set [])
        |> Set.union (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
@@ -98,7 +97,7 @@ let rec fsvOf = function
   | Deferred t -> fsvOf t
   | DataType (_, _, ts, s, _) ->
     let fsv = s |> Option.map (StageOp.fvOf) ?| (set []) in
-    ts |> List.map (snd >> (List.map fsvOf))
+    ts |> List.map (fun c -> c.args |> List.map fsvOf)
        |> List.concat
        |> List.fold Set.union fsv
   | Scheme (_, ss, t) -> Set.difference (fsvOf t) (Map.keys ss)
@@ -119,20 +118,11 @@ let rec delayTypeBy i ty =
 let hasTyVar vname t =
   fvOf t |> Set.contains vname
 
-let rec hasSelf name args = function
-  | DataType (n, ts, _, _, _) when (n = name && ts = args) -> true
-  | DataType (_, ts, _, _, _) -> 
-    ts |> List.exists (fun t -> hasSelf name args t)
-  | Fun (a, b) -> hasSelf name args a || hasSelf name args b
-  | Scheme (_, _, t)
-  | Deferred t -> hasSelf name args t
-  | _ -> false
-
 let rec isInductive vt =
   match vt with
     | DataType (vname, vtargs, cts, _, _) ->
-      let hasRec = cts |> List.exists (snd >> List.exists (hasSelf vname vtargs)) in
-      let hasBottom = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs >> not)) in
+      let hasRec = cts |> List.exists (fun c -> c.isRecursive) in
+      let hasBottom = cts |> List.exists (fun c -> c.isRecursive |> not) in
       if (hasRec && hasBottom) then
         Some true
       else if hasRec then

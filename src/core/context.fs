@@ -17,10 +17,10 @@ let printContext ctx =
       | TypeContext (DataType (name, targs, cts, _, _)) when (List.isEmpty cts |> not) ->
         let s = List.concat [targs |> List.map to_s; [name]] |> String.concat " " in
         let cs = 
-          cts |> List.map ((fun (n, ts) -> 
-              if (List.length ts > 0) then
-                sprintf "%s of %s" n (ts |> List.map to_s |> String.concat " * ") 
-              else n
+          cts |> List.map ((fun c -> 
+              if (List.length c.args > 0) then
+                sprintf "%s of %s" (c.name) (c.args |> List.map to_s |> String.concat " * ") 
+              else c.name
             )) |> String.concat " | " in
         printfn "- type %s = %s" s cs
       | TermContext (n, ty, te) ->
@@ -34,10 +34,10 @@ let findConstructor<'a> name (args : 'a list option) ctx =
   let al = args |> Option.map List.length in
   ctx 
     |> List.choose (function 
-        | TypeContext (DataType (vs, targs, ts, s, h)) when (List.isEmpty ts |> not) ->
-          ts 
-            |> List.tryFind (fun (n, xs) -> n = name && (al |> Option.map ((=) (List.length xs)) ?| true))
-            |> Option.map (fun (_, xs) -> (DataType (vs, targs, ts, s, h), xs))
+        | TypeContext (DataType (vs, targs, cs, s, h)) when (List.isEmpty cs |> not) ->
+          cs 
+            |> List.tryFind (fun c -> c.name = name && al |> Option.map ((=) (List.length c.args)) ?| true)
+            |> Option.map (fun c -> (DataType (vs, targs, cs, s, h), c))
         | _ -> None
       )
     |> List.tryHead

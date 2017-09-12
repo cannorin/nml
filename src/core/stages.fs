@@ -13,7 +13,7 @@ type Stage =
     match this with
       | SVar v -> v
       | SZero -> "0" | SInf -> "Inf"
-      | SSucc s -> sprintf "^%s" (to_s s)
+      | SSucc s -> sprintf "%s + 1" (to_s s)
       | SAdd (s, t) -> sprintf "(%s + %s)" (to_s s) (to_s t)
 
 type StageInequality = 
@@ -156,7 +156,9 @@ module StageOp =
           let c = sx <=^ sy in
           match (check c) with
             | Some xs -> [c |> bimap prettify] |> List.append (List.append xs rest |> u)
-            | None -> failwith "unify failed 3"
+            | None -> 
+              printfn "%s" (to_s c);
+              failwith "unify failed 3"
         | [] -> []
       in u cs
     
@@ -164,14 +166,20 @@ module StageOp =
       List.append xs [n] |> unify
 
     let cstr = [
-      SVar "w" +^ SNat 3u <=^ SVar "x";
+      //SVar "v" <=^ SVar "x" +^ SVar "y" +^ SVar "z"
+      //SVar "w" +^ SNat 4u <=^ SVar "x";
       SVar "x" <=^ SVar "y" +^ SNat 1u;
       SVar "y" <=^ SVar "z" +^ SNat 1u;
       SVar "z" <=^ SVar "w" +^ SNat 1u;
-      SVar "v" <=^ SVar "x" +^ SVar "y" +^ SVar "z"
     ]
 
-    let f () = unify (unify (List.rev cstr)) |> List.iter (to_s >> printfn "%s")
+    let f () = 
+      try
+        unify (unify (List.rev cstr)) |> List.iter (to_s >> printfn "%s")
+      with
+        | _ -> ()
 
     ()
   end
+
+StageOp.f ()

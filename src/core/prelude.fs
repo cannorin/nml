@@ -75,4 +75,7 @@ let inline listen x =
   printfn "%s" (to_s x);
   x
 
+let inline printsn x =
+  printfn "%s" (to_s x)
+
 ()
