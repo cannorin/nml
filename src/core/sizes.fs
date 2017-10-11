@@ -1,28 +1,33 @@
-module nml.Stages
+module nml.Sizes
 open Microsoft.FSharp.Collections
 
 let inline to_s x = x.ToString()
 
-type Stage =
+type Size =
   | SVar of string
   | SZero
   | SInf
-  | SSucc of Stage
-  | SAdd of Stage * Stage
+  | SSucc of Size
+  | SAdd of Size * Size
   override this.ToString () =
+    let rec p i = function
+      | SSucc s -> p (i + 1u) s
+      | SZero -> to_s i
+      | s -> sprintf "%s + %i" (to_s s) i
+    in
     match this with
       | SVar v -> v
       | SZero -> "0" | SInf -> "Inf"
-      | SSucc s -> sprintf "%s + 1" (to_s s)
+      | SSucc s -> SSucc s |> p 0u
       | SAdd (s, t) -> sprintf "(%s + %s)" (to_s s) (to_s t)
 
-type StageInequality = 
-  | StageInequality of Stage * Stage
+type SizeInequality = 
+  | SizeInequality of Size * Size
   override this.ToString () =
-    let (StageInequality (s, t)) = this in
-    sprintf "%s <= %s" (to_s s) (to_s t)
+    let (SizeInequality (s, t)) = this in
+    sprintf "[%s <= %s]" (to_s s) (to_s t)
 
-let (<=^) x y = StageInequality (x, y)
+let (<=^) x y = SizeInequality (x, y)
 let (+^) x y = SAdd (x, y)
 let rec SNat = function
   | 0u -> SZero
@@ -33,26 +38,18 @@ let rec SSuccN n s =
     | n -> SSuccN (n - 1u) (SSucc s)
 
 //[<AutoOpen>]
-module StageOp = 
+module SizeOp = 
   begin
     
     let lmap f = function
-      | StageInequality (l, r) -> StageInequality (f l, r)
+      | SizeInequality (l, r) -> SizeInequality (f l, r)
     
     let rmap f = function
-      | StageInequality (l, r) -> StageInequality (l, f r)
+      | SizeInequality (l, r) -> SizeInequality (l, f r)
 
     let bimap f = function
-      | StageInequality (l, r) -> StageInequality (f l, f r)
+      | SizeInequality (l, r) -> SizeInequality (f l, f r)
     
-    let substIn name svl ssbj =
-      let rec sub = function
-        | SVar n when n = name -> svl
-        | SSucc s -> SSucc (sub s)
-        | SAdd (s, t) -> SAdd (sub s, sub t)
-        | x -> x
-      in sub ssbj
-
     let rec fvOf = function
       | SVar v -> set [v]
       | SSucc s -> fvOf s
@@ -91,6 +88,8 @@ module StageOp =
     let prettify s =
       let rec p = function
         | x when isNat x -> toNat x |> SNat
+        | SAdd (SInf, _) | SAdd (_, SInf) | SSucc SInf -> SInf
+        | SAdd (SZero, t) | SAdd (t, SZero) -> t
         | SAdd (SSucc s, t) -> SSucc (SAdd (p s, p t) |> p)
         | SAdd (s, SSucc t) -> SSucc (SAdd (p s, p t) |> p)
         | SAdd (s, t) when isNat s -> p t |> SSuccN (toNat s)
@@ -99,9 +98,18 @@ module StageOp =
         | SSucc s -> SSucc (p s)
         | x -> x
       in p s
-    
+ 
+    let substIn name svl ssbj =
+      let rec sub = function
+        | SVar n when n = name -> svl
+        | SSucc s -> SSucc (sub s)
+        | SAdd (s, t) -> SAdd (sub s, sub t)
+        | x -> x
+      in sub ssbj |> prettify
+   
     let check sieq =
       let rec f = function
+        | (x, y) when x = y -> []
         | (SSucc s, SSucc t) -> f (s, t)
         | (SZero, _) | (_, SInf) -> []
         | (SAdd (s, SZero), t) | (SAdd (SZero, s), t) 
@@ -119,11 +127,14 @@ module StageOp =
         | (SVar v, SVar u) when v = u -> []
         | (s, SVar v) when (fvOf s |> Set.contains v) -> failwith "inconsistent"
         | (SVar v, t) when (fvOf t |> Set.contains v) -> []
+        | (SVar _, _) & (l, r) | (_, SVar _) & (r, l) -> [ (l, r) ]
+        | (SInf, SSucc t) -> f (SInf, t)
+        | (_, SZero) | (SInf, _) -> failwith "inconsistent"
         | (a, b) -> [ (a, b) ]
       in
       try
-        let (StageInequality (a, b)) = sieq in
-        let r = f (prettify a, prettify b) |> List.map StageInequality in
+        let (SizeInequality (a, b)) = sieq in
+        let r = f (prettify a, prettify b) |> List.map SizeInequality in
         if r = [sieq] then Some []
         else r |> List.map (bimap prettify) |> Some
       with
@@ -132,27 +143,27 @@ module StageOp =
     let unify cs =
       let rec u = function
         | x :: y :: rest when x = y -> x :: rest |> u
-        | StageInequality (sx, sy) :: rest when sx = sy -> u rest
-        | StageInequality (SSucc sx, SSucc sy) :: rest -> (sx <=^ sy) :: rest |> u
-        | StageInequality (SVar x, sy) :: rest when (fvOf sy |> Set.contains x |> not) ->
+        | SizeInequality (sx, sy) :: rest when sx = sy -> u rest
+        | SizeInequality (SSucc sx, SSucc sy) :: rest -> (sx <=^ sy) :: rest |> u
+        | SizeInequality (SVar x, sy) :: rest when (fvOf sy |> Set.contains x |> not) ->
           let c = SVar x <=^ sy in
           match (check c) with
             | Some xs ->
               let f xs = xs |> List.map (rmap (substIn x sy)) in
               [c |> bimap prettify] |> List.append (List.append xs rest |> f |> u) 
             | None -> failwith "unify failed 1"
-        | StageInequality (sx, SVar y) :: rest when (fvOf sx |> Set.contains y |> not) ->
+        | SizeInequality (sx, SVar y) :: rest when (fvOf sx |> Set.contains y |> not) ->
           let c = sx <=^ SVar y in
           match (check c) with
             | Some xs ->
               let f xs = xs |> List.map (lmap (substIn y sx)) in
               [c |> bimap prettify] |> List.append (List.append xs rest |> f |> u) 
             | None -> failwith "unify failed 2"
-        | StageInequality (SVar x, sy) :: rest -> (SVar x <=^ sy |> bimap prettify) :: u rest
-        | StageInequality (_, SVar _) :: _ & xs ->
+        | SizeInequality (SVar x, sy) :: rest -> (SVar x <=^ sy |> bimap prettify) :: u rest
+        | SizeInequality (_, SVar _) :: _ & xs ->
           printfn "%A" xs;
           failwith "inconsistent"
-        | StageInequality (sx, sy) :: rest ->
+        | SizeInequality (sx, sy) :: rest ->
           let c = sx <=^ sy in
           match (check c) with
             | Some xs -> [c |> bimap prettify] |> List.append (List.append xs rest |> u)
@@ -182,4 +193,4 @@ module StageOp =
     ()
   end
 
-StageOp.f ()
+SizeOp.f ()

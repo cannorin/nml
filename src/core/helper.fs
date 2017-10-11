@@ -1,7 +1,7 @@
 module nml.Helper
 
 open nml.Ast
-open nml.Stages
+open nml.Sizes
 
 //let TChar = TypeOp ("Char", [], None)
 
@@ -96,7 +96,7 @@ let rec fsvOf = function
   | Fun (a, b) -> Set.union (fsvOf a) (fsvOf b)
   | Deferred t -> fsvOf t
   | DataType (_, _, ts, s, _) ->
-    let fsv = s |> Option.map (StageOp.fvOf) ?| (set []) in
+    let fsv = s |> Option.map (SizeOp.fvOf) ?| (set []) in
     ts |> List.map (fun c -> c.args |> List.map fsvOf)
        |> List.concat
        |> List.fold Set.union fsv

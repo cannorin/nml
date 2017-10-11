@@ -4,8 +4,8 @@ open nml.Ast
 open nml.Parser
 open nml.Typer
 open nml.Helper
-open nml.Stages
-open nml.Stages.StageOp
+open nml.Sizes
+open nml.Sizes.SizeOp
 open nml.UniversalContext
 open Microsoft.FSharp.Collections
 open System
@@ -36,6 +36,7 @@ let builtinTypes =
     DefPolyVariant "Either" ["a"; "b"] [ N ("Left", [TypeVar "a"]); N ("Right", [TypeVar "b"]) ];
     DefInductiveVariant "Nat" (fun self -> [ NR ("Succ", [self]); N ("0", []) ]);
     DefPolyInductiveVariant "List" ["a"] (fun self -> [ N ("Nil", []); NR ("Cons", [TypeVar "a"; self]) ])
+    DefPolyInductiveVariant "Tree" ["a"] (fun self -> [ NR ("Node", [self; self]); N ("Leaf", [TypeVar "a"]) ]) 
   ]
 
 let impossible = UTmLiteral LUnit
@@ -47,7 +48,7 @@ let DefFun name targs tret f =
   TermContext (name, t, ExternalFun name t e)
 
 let DefPolyFun name tas scs targs tret f =
-  let scs = scs |> List.choose (function | StageInequality (SVar a, b) -> Some (a, b) | _ -> None) |> Map.ofList in
+  let scs = scs |> List.choose (function | SizeInequality (SVar a, b) -> Some (a, b) | _ -> None) |> Map.ofList in
   let (_, timeret) = getTimeOfType tret
   let e xs = UTmApply (ExternalFun name (Scheme (set tas, scs, foldFun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
   let t = Scheme (set tas, scs, foldFun targs tret) in
@@ -58,14 +59,7 @@ let DefRawTerm name term =
     let (t', tt) = inferWithContext builtinTypes term in
     TermContext (name, tt, t')
   with
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut) |> failwith
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n; failwith "";
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r); failwith ""
-    | TyperFailed (TermWithMessage (f, tm)) ->
-      sprintf f (to_s tm) |> printfn "TYPER FAILED: %s"; failwith "";
+    | TyperFailed tf -> printTyperErr tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
 
 
@@ -76,14 +70,7 @@ let DefRawCode name s =
     TermContext (name, tt, t')
   with
     | ParserFailed msg -> sprintf "PARSER FAILED: %s" msg |> failwith
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut) |> failwith
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n; failwith "";
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r); failwith ""
-    | TyperFailed (TermWithMessage (f, tm)) ->
-      sprintf f (to_s tm) |> printfn "TYPER FAILED: %s"; failwith "";
+    | TyperFailed tf -> printTyperErr tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
 
 let addTerm name term ctx =
@@ -107,12 +94,12 @@ let builtinTerms = [
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a * b) |> UTmLiteral
     | _ -> impossible
   );
-  DefPolyFun "%" [] [DefSVar "b"; DefSVar "c"; SVar "d" <=^ SVar "b"; SVar "d" <=^ SVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS (SVar "d")) (function
+  DefPolyFun "%" [] [DefSVar "b"; DefSVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (NatS (SVar "c")) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a % b) |> UTmLiteral
     | _ -> impossible
   );
   DefRawCode "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
-  DefPolyFun "-?" [] [DefSVar "b"; DefSVar "c"; SVar "d" <=^ SVar "b"] [NatS (SVar "b"); NatS (SVar "c")] (TOption (NatS (SVar "d"))) (function
+  DefPolyFun "-?" [] [DefSVar "b"; DefSVar "c"] [NatS (SVar "b"); NatS (SVar "c")] (TOption (NatS (SVar "b"))) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
       if (a > b) then
         UTmConstruct ("Some", [LNat (a - b) |> UTmLiteral])

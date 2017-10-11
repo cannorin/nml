@@ -1,5 +1,5 @@
 module nml.Ast
-open nml.Stages
+open nml.Sizes
 
 type Type =
   | TypeVar of string
@@ -9,10 +9,10 @@ type Type =
   | DataType of string 
               * Type list 
               * Constructor list
-              * Stage option
+              * Size option
               * EqualityNull<string * Printf.StringFormat<string -> string>>
   | InductiveSelf of string
-  | Scheme of Set<string> * Map<string, Stage> * Type
+  | Scheme of Set<string> * Map<string, Size> * Type
   override x.ToString() =
     let rec tos = function
       | TypeVar n 
@@ -57,8 +57,8 @@ let TypeOp (name, ts, po) =
 let Variant (name, ts, cs) =
   DataType (name, ts, cs, None, Null)
 
-let InductiveVariant (n, ts, f, stage) =
-  DataType (n, ts, (InductiveSelf n) |> f, Some stage, Null)
+let InductiveVariant (n, ts, f, size) =
+  DataType (n, ts, (InductiveSelf n) |> f, Some size, Null)
 
 type Literal =
   | LNat of nat

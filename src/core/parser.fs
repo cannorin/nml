@@ -234,7 +234,7 @@ let expr_lambda = tuple2 (syn "fun" >>. (unitparam <|> sepEndBy1 name spaces1) .
 
 let makeLet (vars, value, expr) =
   assert (vars <> []);
-  let (h :: t) = vars in
+  let (h, t) = match vars with h :: t -> (h, t) | _ -> failwith "impossible" in
   if (List.length t = 0) then
     PTmLet (h, value, expr)
   else

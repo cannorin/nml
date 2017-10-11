@@ -18,7 +18,7 @@ let tryRun ctx code quiet =
   try
     let e = parseTerm code in
     let e' = e |> toUntypedTerm ctx in
-    let (e'', te) = inferWithContext ctx e' in
+    let (e'', te) = inferWithContext_dbg ctx e' false in
     cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
     let rec loop t i =
       let t' = t |> eval (ctx |> toEvalContext) in
@@ -29,14 +29,7 @@ let tryRun ctx code quiet =
     in loop e'' 0
   with
     | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-    | TyperFailed (TermWithMessage (f, t)) ->
-      sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
+    | TyperFailed tf -> printTyperErr tf
     | e -> printfn "NATIVE ERROR: %s" e.Message
 
 let rec loop ctx inc =
