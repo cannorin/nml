@@ -223,7 +223,6 @@ type FailureReason =
   | UnknownConst of string * UntypedTerm list * Context
   | NotMatchable of UntypedTerm * Type * UntypedTerm
   | TermWithMessage of Printf.StringFormat<string -> string> * UntypedTerm
-  | NotRunnable of Type
   | NotInductive of Type
 
 exception TyperFailed of FailureReason
@@ -249,7 +248,7 @@ let unify cs =
       u (CTypeEq (a1, a2, f) :: CTypeEq (b1, b2, f) :: rest)
     | CTypeEq (Deferred a, Deferred b, d) :: rest ->
       u (CTypeEq (a, b, d) :: rest)
-    | CTypeEq (s, t, u) :: rest ->
+    | CTypeEq (s, t, u) :: _ ->
       let (s', t') = prettify2 (s, t) in
       UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
     | CSizeLte (SizeInequality (sl, sr), tl, tr, tm) :: rest ->
@@ -364,6 +363,7 @@ let rec recon ctx stack uniq term =
     | UTmConstruct (n, args) ->
       match (ctx |> findConstructor n (Some args)) with
         | Some (DataType (name, vtargs, cts, s, h), ctor) & Some (vt, _) ->
+          printfn "%A" s;
           let vtprms = vtargs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
           let vsprms = s |> Option.map (SizeOp.fvOf >> Set.toList) ?| [] in
           let f (ft, fs, _) (vas, cts, st) =
@@ -373,6 +373,7 @@ let rec recon ctx stack uniq term =
             )
           in
           let ((vtargs', cts', s'), uniq) = (vtargs, cts, s) |> rename uniq vtprms vsprms f in
+          printfn "%A" s';
           let (cts', cstr, uniq) = 
             if ctor.isRecursive then
               unfoldInductive uniq (name, vtargs', cts', s', h) (UTmConstruct (n, args), vt)
@@ -466,14 +467,8 @@ let rec recon ctx stack uniq term =
 
     | UTmMatch (v, cases) ->
       let (v', tv, uniq, cstr) = recon ctx stack uniq v in
-      let rec expandCases = function
-        | UTmApply (UTmFreeVar "::", [l; r]) -> UTmConstruct ("Cons", [expandCases l; expandCases r])
-        | UTmLiteral (LNat 0u) -> UTmConstruct ("0", [])
-        | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
-        | x -> x
-      in
       let cases = cases |> List.map (fun (ptn, body) -> (expandCases ptn, body)) in
-      let (a, uniq) = reconFromPatterns (UTmMatch (v, cases)) ctx uniq in
+      let (a, uniq) = reconFromPatterns cases (UTmMatch (v, cases)) ctx uniq in
       if ((getTimeOfType tv |> snd) > 0) then
         TermWithMessage ("the term '%s' is not pure and cannot be matched.", v') |> TyperFailed |> raise
       let (bs', tbs, uniq, css) = 
@@ -509,8 +504,40 @@ let rec recon ctx stack uniq term =
           | _ -> failwith "impossible_UFixMatch"
       in
       let tthis = Fun (targ, tret) in
-
       let ctx' = ctx |> typerAdd "x" targ' in
+      
+      (*
+      let cases = cases |> List.map (fun (ptn, body) -> (expandCases ptn, body)) in
+      
+      let (a, uniq) = reconFromPatterns cases (UTmFixMatch cases) ctx uniq in
+      let (bs', tbs, uniq, css) = 
+        let f = 
+          cases 
+            |> List.foldBack (fun (pat, body) (bs', tbs, u, css) ->
+                if (isValidAsPattern pat |> not) then
+                  TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
+                else
+                  match (bindPattern pat a ctx u) with
+                    | Some (stack', cstr, uniq) -> 
+                      let (n, uniq) = genUniq uniq in
+                      let selfType = Fun (TypeVar n, a) in
+                      let stack = selfType :: stack in 
+                      let stack = List.append stack' stack in
+                      let (n, uniq) = genUniq uniq in
+                      let (body', tbody, uniq, bcstr) = recon ctx stack uniq body in
+                      match (a, tbody |> substAll (unify bcstr |> cstr_toAsgn)) with
+                        | (DataType (_, _, _, Some s, _), DataType (_, _, _, Some t, _)) ->
+                          let d = SizeOp.tryGetDiff s t |> Option.map ((|>) SZero >> to_s) ?| (sprintf "%s, %s" (to_s a) (to_s tbody)) in
+                          printsn d
+                        | (a, tbody) -> printfn "%s, %s" (to_s a) (to_s tbody)
+                      (body' :: bs', tbody :: tbs, uniq, bcstr <+> cstr <+> css)
+                    | None -> NotMatchable (pat, a, body) |> TyperFailed |> raise
+              )
+        in f ([], [], uniq, [])
+      in
+      *)
+      //let checkDiff (pat, bdy) =
+      
       let (mth, tmth, uniq, cstr1) = recon ctx' (tthis :: stack) uniq (UTmMatch (UTmFreeVar "x", cases)) in
 
       let (ret, uniq) = genUniq uniq in
@@ -562,12 +589,7 @@ and verifyTermination cases =
         | _ -> verify [] [] bdy
     )
 
-and reconFromPatterns mth ctx uniq =
-  let pats =
-    match mth with
-      | (UTmMatch (_, x)) -> x
-      | _ -> failwith "impossible_reconFromPatterns"
-  in
+and reconFromPatterns pats tm ctx uniq =
   let (a, uniq) = genUniq uniq in
   let rec gh uq pat =
     match pat with
@@ -615,7 +637,7 @@ and reconFromPatterns mth ctx uniq =
   in
   let (uniq, ts) = pats |> List.map fst |> List.fold (fun (u, ts) p -> let (nu, t) = gh u p in (nu, t :: ts)) (uniq, []) in
   let cstr =
-    ts |> List.map (fun t -> CTypeEq (TypeVar a, t, mth))
+    ts |> List.map (fun t -> CTypeEq (TypeVar a, t, tm))
   in 
   let rt = TypeVar a |> substAll (unify cstr |> cstr_toAsgn) in
   exhaustiveCheck (pats |> List.map fst) rt ctx;
@@ -805,15 +827,20 @@ let infer term =
 
 let printTyperErr = function
   | UnifyFailed (a, b, ut) ->
-    printfn "%A" b;
+    //printfn "%A" b;
     printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
   | SizeInconsistent (ti, a, b, ut) ->
     printfn "TYPER FAILED: '%s' and '%s' require an inconsistent size condition '%s'.\n------------> %s" (to_s a) (to_s b) (to_s ti) (to_s ut)
   | UnknownVar (n, ctx) ->
     printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
+  | UnknownConst (n, ts, ctx) ->
+    let ac = ts |> List.length in
+    printfn "TYPER FAILED: a constructor '%s' that has %i arguments does not exist." n ac
   | NotMatchable (l, t, r) ->
     printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
   | TermWithMessage (f, t) ->
     sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
+  | NotInductive t ->
+    printfn "TYPER FAILED: '%s' is not inductive" (to_s t)
 
 ()

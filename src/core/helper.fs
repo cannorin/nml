@@ -19,6 +19,12 @@ let NatS s =
 
 let Nat = DataType ("Nat", [], [ NewRecConst ("Succ", [InductiveSelf "Nat"]); NewConst ("0", []) ], None, Null)
 
+let rec expandCases = function
+  | UTmApply (UTmFreeVar "::", [l; r]) -> UTmConstruct ("Cons", [expandCases l; expandCases r])
+  | UTmLiteral (LNat 0u) -> UTmConstruct ("0", [])
+  | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
+  | x -> x
+
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
@@ -102,6 +108,10 @@ let rec fsvOf = function
        |> List.fold Set.union fsv
   | Scheme (_, ss, t) -> Set.difference (fsvOf t) (Map.keys ss)
   | _ -> set []
+
+let getSizeOfType ty = function
+  | DataType (_, _, _, Some s, _) -> Some s
+  | _ -> None
 
 let getTimeOfType ty =
   let rec dig i = function

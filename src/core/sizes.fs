@@ -173,24 +173,5 @@ module SizeOp =
         | [] -> []
       in u cs
     
-    let eval n xs =
-      List.append xs [n] |> unify
-
-    let cstr = [
-      //SVar "v" <=^ SVar "x" +^ SVar "y" +^ SVar "z"
-      //SVar "w" +^ SNat 4u <=^ SVar "x";
-      SVar "x" <=^ SVar "y" +^ SNat 1u;
-      SVar "y" <=^ SVar "z" +^ SNat 1u;
-      SVar "z" <=^ SVar "w" +^ SNat 1u;
-    ]
-
-    let f () = 
-      try
-        unify (unify (List.rev cstr)) |> List.iter (to_s >> printfn "%s")
-      with
-        | _ -> ()
-
-    ()
   end
 
-SizeOp.f ()

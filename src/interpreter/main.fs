@@ -30,7 +30,9 @@ let tryRun ctx code quiet =
   with
     | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
     | TyperFailed tf -> printTyperErr tf
+#if !DEBUG
     | e -> printfn "NATIVE ERROR: %s" e.Message
+#endif
 
 let rec loop ctx inc =
   let i =
