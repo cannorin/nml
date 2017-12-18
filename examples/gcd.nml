@@ -1,0 +1,23 @@
+let gcd a b =
+  let f = 
+    fixpoint f of
+    | 1 -> fun a b -> b
+    | Succ n ->
+        begin fun a b ->
+          if (a % b = n) then
+            f n b n
+          else
+            f n a b
+        end
+    | 0 -> fun _ _ -> 0
+  in 
+  if (a > b) then
+    f b a b
+  else
+    f a b a
+in
+
+let! x = readNat () in
+let! y = readNat () in
+gcd x y |> print
+

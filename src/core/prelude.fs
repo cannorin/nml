@@ -1,6 +1,26 @@
 [<AutoOpen>]
 module nml.Prelude
 
+[<CustomEquality; NoComparison>]
+type EqualityNull<'T> = 
+  | EValue of 'T
+  | ENull
+  override x.Equals(yobj) =
+    match yobj with
+      | :? EqualityNull<'T> as y -> true
+      | _ -> false
+  override x.GetHashCode() = 0
+
+[<CustomEquality; NoComparison>]
+type NameCompared<'T> = 
+  { value: 'T; name: string }
+  override x.Equals(yobj) =
+    match yobj with
+      | :? NameCompared<'T> as y -> x.name = y.name
+      | _ -> false
+  override x.GetHashCode() = 0
+
+
 let inline to_s x = x.ToString()
 let inline (?|) x y = defaultArg x y
 

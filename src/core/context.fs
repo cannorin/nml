@@ -14,30 +14,34 @@ type Context = ContextItem list
 let printContext ctx =
   for x in ctx do
     match x with
-      | TypeContext (Variant (name, targs, cts)) ->
+      | TypeContext (DataType (name, targs, cts, ENull)) ->
         let s = List.concat [targs |> List.map to_s; [name]] |> String.concat " " in
         let cs = 
-          cts |> List.map ((fun (n, ts) -> 
-              if (List.length ts > 0) then
-                sprintf "%s of %s" n (ts |> List.map to_s |> String.concat " * ") 
-              else n
-            )) |> String.concat " | " in
-        printfn "- type %s = %s" s cs
+          cts |> List.map ((fun c -> 
+              if (List.length c.args > 0) then
+                sprintf "%s of %s" c.name (c.args |> List.map to_s |> String.concat " * ") 
+              else c.name
+            )) |> String.concat " | "
+        in
+        if (String.length cs > 0) then
+          printfn "- type %s = %s" s cs
+        else
+          printfn "- type %s" s
       | TermContext (n, ty, te) ->
         printfn "- let %s : %s" (handle_op n) (to_s ty)
       | _ -> ()
 
 let findType name ctx =
-  ctx |> List.choose (function | TypeContext (Variant (vs, ts, cts)) when vs = name -> Variant (vs, ts, cts) |> Some | _ -> None) |> List.tryHead
+  ctx |> List.choose (function | TypeContext (DataType (vs, ts, cts, _)) when vs = name -> DataType (vs, ts, cts, ENull) |> Some | _ -> None) |> List.tryHead
 
 let findConstructor<'a> name (args : 'a list option) ctx =
   let al = args |> Option.map List.length in
   ctx 
     |> List.choose (function 
-        | TypeContext (Variant (vs, targs, ts)) ->
+        | TypeContext (DataType (vs, targs, ts, _)) ->
           ts 
-            |> List.tryFind (fun (n, xs) -> n = name && (al |> Option.map ((=) (List.length xs)) ?| true))
-            |> Option.map (fun (_, xs) -> (Variant (vs, targs, ts), xs))
+            |> List.tryFind (fun c -> c.name = name && (al |> Option.map ((=) (List.length c.args)) ?| true))
+            |> Option.map (fun c -> (DataType (vs, targs, ts, ENull), c.args))
         | _ -> None
       )
     |> List.tryHead

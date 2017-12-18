@@ -2,6 +2,9 @@ module nml.Helper
 
 open nml.Ast
 
+let argsmap f c =
+  { c with args = c.args |> List.map f }
+
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
@@ -23,6 +26,12 @@ let matchPattern pat t =
     mt pat t |> List.map snd |> Some
   with
     | _ -> None
+
+let rec expandCases = function
+  | UTmApply (UTmFreeVar "::", [l; r]) -> UTmConstruct ("Cons", [expandCases l; expandCases r])
+  | UTmLiteral (LNat 0u) -> UTmConstruct ("0", [])
+  | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
+  | x -> x
 
 // (((f a) b) c) --> (f, [a; b; c])
 let rec expandApply = function
@@ -67,12 +76,11 @@ let rec fvOf = function
   | TypeVar n -> set [n]
   | Fun (a, b) -> Set.union (fvOf a) (fvOf b)
   | Deferred t -> fvOf t
-  | Variant (_, vs, ts) -> 
-    ts |> List.map (snd >> (List.map fvOf)) 
+  | DataType (_, vs, ts, _) -> 
+    ts |> List.map (fun c -> c.args |> List.map fvOf) 
        |> List.concat
        |> List.fold Set.union (set [])
        |> Set.union (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
-  | TypeOp (_, ts, _) -> ts |> List.map fvOf |> List.fold Set.union (set [])
   | Scheme (vs, t) -> Set.difference (fvOf t) vs
   | _ -> set []
 
@@ -91,20 +99,11 @@ let rec delayTypeBy i ty =
 let hasTyVar vname t =
   fvOf t |> Set.contains vname
 
-let rec hasSelf name args = function
-  | Variant (n, ts, _)
-  | TypeOp (n, ts, _) when (n = name && ts = args) -> true
-  | Fun (a, b) -> hasSelf name args a || hasSelf name args b
-  | Scheme (_, t)
-  | Deferred t -> hasSelf name args t
-  | TypeOp (_, ts, _) -> ts |> List.exists (fun t -> hasSelf name args t)
-  | _ -> false
-
 let rec isInductive vt =
   match vt with
-    | Variant (vname, vtargs, cts) ->
-      let hasRec = cts |> List.exists (snd >> List.exists (hasSelf vname vtargs)) in
-      let hasBottom = cts |> List.exists (snd >> List.forall (hasSelf vname vtargs >> not)) in
+    | DataType (vname, vtargs, cts, _) ->
+      let hasRec = cts |> List.exists (fun c -> c.isRecursive) in
+      let hasBottom = cts |> List.exists (fun c -> c.isRecursive |> not) in
       if (hasRec && hasBottom) then
         Some true
       else if hasRec then

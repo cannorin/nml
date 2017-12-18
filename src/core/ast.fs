@@ -1,38 +1,18 @@
 module nml.Ast
  
-[<CustomEquality; NoComparison>]
-type EqualityNull<'T> = 
-  | Value of 'T
-  override x.Equals(yobj) =
-    match yobj with
-      | :? EqualityNull<'T> as y -> true
-      | _ -> false
-  override x.GetHashCode() = 0
-
-[<CustomEquality; NoComparison>]
-type NameCompared<'T> = 
-  { value: 'T; name: string }
-  override x.Equals(yobj) =
-    match yobj with
-      | :? NameCompared<'T> as y -> x.name = y.name
-      | _ -> false
-  override x.GetHashCode() = 0
-
-
 type Type =
   | TypeVar of string
   | Bool | Unit
   | Fun of Type * Type
   | Deferred of Type
-  | TypeOp of string * Type list * EqualityNull<(string * Printf.StringFormat<string -> string>) option>
-  | Variant of string * Type list * (string * Type list) list
+  | DataType of string * Type list * Constructor list * EqualityNull<string * Printf.StringFormat<string -> string>>
+  | DataTypeSelf of string * Type list
   | Scheme of Set<string> * Type
   override x.ToString() =
     let inline to_sc x =
       match x with
         | TypeVar _ | Bool | Unit | Deferred _ -> to_s x
-        | TypeOp (n, [], _)
-        | Variant (n, [], _) -> n
+        | DataType (n, [], _, _) -> n
         | c -> "(" + (to_s c) + ")"
     in
     match x with
@@ -41,32 +21,43 @@ type Type =
       | Unit -> "Unit"
       | Fun (a, b) -> sprintf "%s -> %s" (to_sc a) (to_s b)
       | Deferred t -> sprintf "<%s>" (to_s t)
-      | TypeOp (n, [], _) -> n
-      | TypeOp (n, ts, Value (Some (c, f))) -> sprintf f (ts |> List.map to_sc |> String.concat c)
-      | TypeOp (n, ts, Value None) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
-      | Variant (n, [], _) -> n
-      | Variant (n, ts, _) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n 
+      | DataType (n, [], _, _) -> n
+      | DataType (n, ts, _, EValue (c, f)) -> sprintf f (ts |> List.map to_sc |> String.concat c)
+      | DataType (n, ts, _, _)
+      | DataTypeSelf (n, ts) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
       | Scheme (ts, t) -> sprintf "∀%s. (%s)" (ts |> String.concat ", ") (to_s t)
+and Constructor =
+  { name: string; args: Type list; isRecursive: bool; }
+  
+
+let NewConst (n, a) =
+  { name = n; args = a; isRecursive = false }
+
+let NewRecConst (n, a) =
+  { name = n; args = a; isRecursive = true }
+
+let TypeOp (name, ts, po) =
+  DataType (name, ts, [], po)
+
+let Variant (name, ts, cs) =
+  DataType (name, ts, cs, ENull)
+
+let InductiveVariant (n, ts, f) =
+  DataType (n, ts, DataTypeSelf (n, ts) |> f, ENull)
 
 //let TChar = TypeOp ("Char", [], None)
 
-let NewTypeOp (tn, ts, o) =
-  TypeOp (tn, ts, Value o)
-
 let TTuple ts =
-  NewTypeOp ("*", ts, Some(" * ", "%s"))
-
-let InductiveVariant (n, ts, f) =
-  Variant (n, ts, TypeOp (n, ts, Value None) |> f)
+  TypeOp ("*", ts, EValue (" * ", "%s"))
 
 let TList a =
-  InductiveVariant ("List", [a], (fun self -> [ ("Nil", []); ("Cons", [a; self]) ]))
+  InductiveVariant ("List", [a], (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [a; self]) ]))
 
 let TOption a =
-  Variant ("Option", [a], [ ("Some", [a]); ("None", []) ]);
+  Variant ("Option", [a], [ NewConst ("Some", [a]); NewConst ("None", []) ]);
 
 let Nat = 
-  InductiveVariant ("Nat", [], (fun self -> [ ("Succ", [self]); ("0", []) ]))
+  InductiveVariant ("Nat", [], (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]))
 
 type Literal =
   | LNat of uint32

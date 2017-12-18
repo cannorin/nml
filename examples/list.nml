@@ -42,5 +42,27 @@ in
 
 l2 |> print !;
 l2 |> find ((>) 5) |> print !;
-l2 |> nth 2 |> print
+l2 |> nth 2 |> print !;
+
+
+let sort l =
+  let ins x = fixpoint f of
+      h :: t ->
+        if (x < h) then
+          x :: h :: t
+        else
+          h :: (f t)
+    | [] -> [x]
+  in
+  let f = fixpoint f of
+      h :: t ->
+        begin fun resl ->
+          f t (ins h resl)
+        end
+    | [] -> id
+  in f l []
+in
+
+let l3 = [7; 5; 3; 2; 3; 7; 9; 3] in
+l3 |> sort |> print
 

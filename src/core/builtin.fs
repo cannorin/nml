@@ -12,7 +12,7 @@ let DefType t =
   TypeContext t
 
 let DefTypeOp name printer =
-  TypeContext (NewTypeOp (name, [], printer))
+  TypeContext (TypeOp (name, [], printer))
 
 let DefVariant name ts =
   TypeContext (Variant (name, [], ts))
@@ -27,10 +27,10 @@ let DefPolyInductiveVariant name targs f =
   TypeContext (InductiveVariant (name, targs |> List.map TypeVar, f))
 
 let builtinTypes = [
-  DefPolyVariant "Option" ["a"] [ ("Some", [TypeVar "a"]); ("None", []) ];
-  DefPolyVariant "Either" ["a"; "b"] [ ("Left", [TypeVar "a"]); ("Right", [TypeVar "b"]) ];
-  DefInductiveVariant "Nat" (fun self -> [ ("Succ", [self]); ("0", []) ]);
-  DefPolyInductiveVariant "List" ["a"] (fun self -> [ ("Nil", []); ("Cons", [TypeVar "a"; self]) ])
+  DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TypeVar "a"]); NewConst ("None", []) ];
+  DefPolyVariant "Either" ["a"; "b"] [ NewConst ("Left", [TypeVar "a"]); NewConst ("Right", [TypeVar "b"]) ];
+  DefInductiveVariant "Nat" (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]);
+  DefPolyInductiveVariant "List" ["a"] (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [TypeVar "a"; self]) ])
 ]
 
 let impossible = UTmLiteral LUnit
@@ -56,16 +56,8 @@ let DefRawTerm name term =
     else
       TermContext (name, tt, t')
   with
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut) |> failwith
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n; failwith "";
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r); failwith ""
-    | TyperFailed (TermWithMessage (f, tm)) ->
-      sprintf f (to_s tm) |> printfn "TYPER FAILED: %s"; failwith "";
+    | TyperFailed tf -> printTypeError tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
-
 
 let DefRawCode name s =
   try
@@ -78,14 +70,7 @@ let DefRawCode name s =
       TermContext (name, tt, t')
   with
     | ParserFailed msg -> sprintf "PARSER FAILED: %s" msg |> failwith
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut) |> failwith
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n; failwith "";
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r); failwith ""
-    | TyperFailed (TermWithMessage (f, tm)) ->
-      sprintf f (to_s tm) |> printfn "TYPER FAILED: %s"; failwith "";
+    | TyperFailed tf -> printTypeError tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
 
 let addTerm name term ctx =
