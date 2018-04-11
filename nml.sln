@@ -1,9 +1,25 @@
-
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2012
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml.Core", "src/core/nml.Core.fsproj", "{052EA2E7-2A4D-495A-8308-85FF00AF6137}"
+# Visual Studio 15
+VisualStudioVersion = 15.0.27428.2011
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml.Core", "src\core\nml.Core.fsproj", "{94A7F528-BA4D-41BA-B5D1-A0F6CF5CCEE0}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml.Interpreter", "src/interpreter/nml.Interpreter.fsproj", "{FAD85D01-B163-4F7D-882D-02FFCEAF3842}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml.Interpreter", "src\interpreter\nml.Interpreter.fsproj", "{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{DD628226-6686-40A3-8E37-12CF5B31CE1B}"
+	ProjectSection(SolutionItems) = preProject
+		examples\ackermann.nml = examples\ackermann.nml
+		examples\beta_reduction_inside_lambda.nml = examples\beta_reduction_inside_lambda.nml
+		examples\deep_recursion.nml = examples\deep_recursion.nml
+		examples\function_composition.nml = examples\function_composition.nml
+		examples\gcd.nml = examples\gcd.nml
+		examples\list.nml = examples\list.nml
+		examples\math.nml = examples\math.nml
+		examples\nat_io.nml = examples\nat_io.nml
+		examples\operator_definition.nml = examples\operator_definition.nml
+		examples\quoted_code.nml = examples\quoted_code.nml
+		examples\variant_match.nml = examples\variant_match.nml
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,13 +27,19 @@ Global
 		Release|AnyCPU = Release|AnyCPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{052EA2E7-2A4D-495A-8308-85FF00AF6137}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
-		{052EA2E7-2A4D-495A-8308-85FF00AF6137}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
-		{052EA2E7-2A4D-495A-8308-85FF00AF6137}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
-		{052EA2E7-2A4D-495A-8308-85FF00AF6137}.Release|AnyCPU.Build.0 = Release|AnyCPU
-		{FAD85D01-B163-4F7D-882D-02FFCEAF3842}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
-		{FAD85D01-B163-4F7D-882D-02FFCEAF3842}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
-		{FAD85D01-B163-4F7D-882D-02FFCEAF3842}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
-		{FAD85D01-B163-4F7D-882D-02FFCEAF3842}.Release|AnyCPU.Build.0 = Release|AnyCPU
+		{94A7F528-BA4D-41BA-B5D1-A0F6CF5CCEE0}.Debug|AnyCPU.ActiveCfg = Debug|Any CPU
+		{94A7F528-BA4D-41BA-B5D1-A0F6CF5CCEE0}.Debug|AnyCPU.Build.0 = Debug|Any CPU
+		{94A7F528-BA4D-41BA-B5D1-A0F6CF5CCEE0}.Release|AnyCPU.ActiveCfg = Release|Any CPU
+		{94A7F528-BA4D-41BA-B5D1-A0F6CF5CCEE0}.Release|AnyCPU.Build.0 = Release|Any CPU
+		{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}.Debug|AnyCPU.ActiveCfg = Debug|Any CPU
+		{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}.Debug|AnyCPU.Build.0 = Debug|Any CPU
+		{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}.Release|AnyCPU.ActiveCfg = Release|Any CPU
+		{F5AC1054-0BD6-4650-A9E5-B090DAD1DEDF}.Release|AnyCPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {AF2A9543-55A0-4182-AA8B-E71FCCC4DFB7}
 	EndGlobalSection
 EndGlobal

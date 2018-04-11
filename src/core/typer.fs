@@ -5,8 +5,6 @@ open nml.Helper
 open nml.UniversalContext
 open Microsoft.FSharp.Collections
 
-let inline (<+>) l r = List.append l r
-
 type Constraint = Constraint of Type * Type * UntypedTerm
 let cstr_Extract = function
   | Constraint (s, t, u) -> (s, t, u)
@@ -197,7 +195,7 @@ let rec recon ctx stack uniq term =
       let (u, uniq) = genUniq uniq in
       let (body', t, uniq, cstr) = recon ctx ((TypeVar u) :: stack) uniq body in
       let (v, uniq) = genUniq uniq in
-      (UTmFun body', TypeVar v, uniq, cstr <+> Constraint (TypeVar v, Fun (TypeVar u, t), UTmFun body') :: [])
+      (UTmFun body', TypeVar v, uniq, cstr @ Constraint (TypeVar v, Fun (TypeVar u, t), UTmFun body') :: [])
 
     | UTmConstruct (n, args) ->
       match (ctx |> findConstructor n (Some args)) with
@@ -214,7 +212,7 @@ let rec recon ctx stack uniq term =
               |> List.map2 (fun x (y, z) -> Constraint (y, z, x)) args'
           in
           let (u, uniq) = genUniq uniq in
-          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs <+> cstrs <+> Constraint (TypeVar u, DataType (name, vtargs', cts', p), UTmConstruct (n, args')) :: [])
+          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs @ cstrs @ Constraint (TypeVar u, DataType (name, vtargs', cts', p), UTmConstruct (n, args')) :: [])
         | _
         | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
     
@@ -229,7 +227,7 @@ let rec recon ctx stack uniq term =
       let (l', tl, uniq, cstr1) = recon ctx stack uniq l in
       let (rs', trs, uniq, cstr2) = multiRecon uniq rs in
       let (nv, uniq) = genUniq uniq in
-      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 <+> cstr1 <+> Constraint (tl, foldFun trs (TypeVar nv), UTmApply (l', rs')) :: [])
+      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun trs (TypeVar nv), UTmApply (l', rs')) :: [])
 
     | UTmLiteral l -> 
       match l with
@@ -255,19 +253,19 @@ let rec recon ctx stack uniq term =
       let ctx' = ctx |> typerAdd x tx in
       let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body in
 
-      let tbody' = tbody |> substAll (cstr1 <+> cstr2 |> unify |> cstr_toAsgn) in
+      let tbody' = tbody |> substAll (cstr1 @ cstr2 |> unify |> cstr_toAsgn) in
 
       let (r, uniq) = genUniq uniq in
-      (UTmLet (x, value', body'), TypeVar r, uniq, cstr1 <+> cstr2 <+> Constraint (TypeVar r, tbody, UTmLet (x, value', body')) :: [])
+      (UTmLet (x, value', body'), TypeVar r, uniq, cstr1 @ cstr2 @ Constraint (TypeVar r, tbody, UTmLet (x, value', body')) :: [])
    
     | UTmLetDefer (x, value, body) ->
       let (nv, uniq) = genUniq uniq in
       let (value', tvalue, uniq, cstr) = recon ctx stack uniq value in
       let (mv, uniq) = genUniq uniq in
-      let cstr' = cstr <+> Constraint (Deferred (TypeVar nv), tvalue, value') :: Constraint (TypeVar mv, Deferred (TypeVar nv), value') :: [] in
+      let cstr' = cstr @ Constraint (Deferred (TypeVar nv), tvalue, value') :: Constraint (TypeVar mv, Deferred (TypeVar nv), value') :: [] in
       let (lv, uniq) = genUniq uniq in
       let (body', tbody, uniq, cstr2) = recon (ctx |> typerAdd x (TypeVar lv)) stack uniq body in
-      let cstr2' = cstr2 <+> cstr' in
+      let cstr2' = cstr2 @ cstr' in
       let (tvalue', timevalue) = (TypeVar mv) |> substAll (cstr2' |> unify |> cstr_toAsgn) |> getTimeOfType  in
       UTmLet (x, value' |> times timevalue UTmRun, body) |> times timevalue UTmDefer |> recon ctx stack uniq
 
@@ -276,14 +274,14 @@ let rec recon ctx stack uniq term =
       let dt = Deferred (TypeVar nv) in
       let (x', tx, uniq, cstr) = recon ctx stack uniq x in
       let (mv, uniq) = genUniq uniq in
-      (UTmDefer x', TypeVar mv, uniq, cstr <+> Constraint (TypeVar nv, tx, UTmDefer x') :: Constraint (TypeVar mv, dt, UTmDefer x') :: [])
+      (UTmDefer x', TypeVar mv, uniq, cstr @ Constraint (TypeVar nv, tx, UTmDefer x') :: Constraint (TypeVar mv, dt, UTmDefer x') :: [])
     
     | UTmRun x ->
       let (nv, uniq) = genUniq uniq in
       let dt = Deferred (TypeVar nv) in
       let (x', tx, uniq, cstr) = x |> recon ctx stack uniq in
       let (mv, uniq) = genUniq uniq in
-      (UTmRun x', TypeVar mv, uniq, cstr <+> Constraint (dt, tx, UTmRun x) :: Constraint (TypeVar mv, TypeVar nv, UTmRun x') :: [])
+      (UTmRun x', TypeVar mv, uniq, cstr @ Constraint (dt, tx, UTmRun x) :: Constraint (TypeVar mv, TypeVar nv, UTmRun x') :: [])
 
     | UTmExternal (_, t) ->
       (term, t, uniq, [])
@@ -324,7 +322,7 @@ let rec recon ctx stack uniq term =
       let bcstr =
         tbs |> List.map2 (fun x t -> Constraint (b, t, x)) bs'
       in
-      let cstrs = cstr <+> css <+> bcstr <+> Constraint (tv, a, v') :: [] in
+      let cstrs = cstr @ css @ bcstr @ Constraint (tv, a, v') :: [] in
       (term', b, uniq, cstrs)
     
     | UTmFixMatch cases ->
@@ -343,14 +341,14 @@ let rec recon ctx stack uniq term =
       match mth with
         | UTmMatch (_, cases) ->
           verifyTermination cases |> ignore;
-          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 <+> Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: Constraint (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
+          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 @ Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: Constraint (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
         | _ ->
           failwith "impossible_UFixMatch"
 
 and verifyTermination cases =
   let fvc p b = List.init (countFvOfPattern p) (fun _ -> b) in
   let rec verify dom codom t =
-    let self = dom |> List.length in
+    let self = dom |> List.length |> ((+) 1) in
     let res = 
       match t with
         | UTmApply (UTmBoundVar f, UTmBoundVar x :: _) when (f = self) ->

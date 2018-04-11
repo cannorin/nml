@@ -34,8 +34,6 @@ let rec shift c d = function
 type EvalMode = Reduce | Replace | Run
 let inline isReplace x = match x with | Replace -> true | _ -> false
 
-let inline (<+>) l r = List.append l r
-
 let rec e ctx stack mode = function
   | UTmFreeVar name ->
     ctx |> Map.tryFind name ?| UTmFreeVar name
@@ -85,7 +83,7 @@ let rec e ctx stack mode = function
             let ufm = UTmFixMatch cases |> shift 0 s |> e ctx stack mode in
             let bind' = bind |> List.map (shift 0 s >> Some) in
             let stack' = stack |> List.map (Option.map (shift 0 s)) in
-            let mt = body |> e ctx (bind' <+> [Some ufm] <+> stack') Replace |> shift 0 -s in
+            let mt = body |> e ctx (bind' @ [Some ufm] @ stack') Replace |> shift 0 -s in
             UTmApply(mt, rest) |> e ctx stack mode
           | None ->
             printfn "%s" (UTmApply (UTmFixMatch cases, x :: rest) |> to_s);
@@ -113,15 +111,15 @@ let rec e ctx stack mode = function
         match (cs |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
           | Some (bind, body) ->
             let bind = bind |> List.map Some in
-            body |> e ctx (bind <+> stack) mode
+            body |> e ctx (bind @ stack) mode
           | None ->
             printfn "%s" (to_s (UTmMatch (x, cs)));
             failwith "match failed"
       | x ->
-        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) <+> stack |> List.map (Option.map (shift 0 (countFvOfPattern pt)))) mode)))
+        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) @ stack |> List.map (Option.map (shift 0 (countFvOfPattern pt)))) mode)))
   
   | UTmFixMatch cs ->
-    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) <+> stack |> List.map (Option.map (shift 0 (1 + countFvOfPattern pt)))) mode)))
+    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) @ stack |> List.map (Option.map (shift 0 (1 + countFvOfPattern pt)))) mode)))
  
   | UTmDefer x ->
     match mode with
