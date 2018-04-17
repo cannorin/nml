@@ -1,42 +1,35 @@
 MONO_PATH?=/usr/bin
 
-EX_NUGET:=nuget/bin/nuget
-PACKAGES:=packages/Mono.Terminal.5.3.0/Mono.Terminal.5.3.0.nupkg
+DOTNET?=$(shell which dotnet)
 
-ifeq (, $(shell which msbuild))
-XBUILD?=$(MONO_PATH)/xbuild /clp:Verbosity=minimal
-else
-XBUILD?=$(MONO_PATH)/msbuild /m /v:m
-endif
+all: release
 
-MONO?=$(MONO_PATH)/mono
-GIT?=$(shell which git)
+release: bin/Release/netcoreapp2.0/current-platform/nmli.dll
 
-NUGET?=$(EX_NUGET)
+bin/Release/netcoreapp2.0/current-platform/nmli.dll:
+	$(DOTNET) publish -c Release -o ../../bin/Release/netcoreapp2.0/current-platform/
 
-all: release ;
+run: release
+	$(DOTNET) bin/Release/netcoreapp2.0/current-platform/nmli.dll
 
-debug: bin/Debug/nml.Core.dll ;
-release: bin/Release/nml.Core.dll ;
 
-bin/Debug/nml.Core.dll: packages
-	$(XBUILD) nml.sln
+self-contained-win:
+	$(DOTNET) publish -c Release --self-contained --runtime win-x64
 
-bin/Release/nml.Core.dll: packages
-	$(XBUILD) nml.sln /p:Configuration=Release
+self-contained-linux:
+	$(DOTNET) publish -c Release --self-contained --runtime linux-x64
 
-# NuGet
+self-contained-osx:
+	$(DOTNET) publish -c Release --self-contained --runtime osx-x64
 
-nuget: $(NUGET) ;
 
-$(EX_NUGET):
-	$(GIT) submodule update --init --recursive
-	cd nuget && $(MAKE)
+debug: bin/Debug/netcoreapp2.0/nmli.dll
 
-packages: nuget $(PACKAGES) ;
+bin/Debug/netcoreapp2.0/nmli.dll:
+	$(DOTNET) build -c Debug
 
-$(PACKAGES):
-	$(NUGET) restore nml.sln
+run-debug: debug
+	$(DOTNET) ./bin/Debug/netcoreapp2.0/nmli.dll
 
 # Clean
 

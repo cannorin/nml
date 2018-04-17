@@ -348,7 +348,7 @@ let rec recon ctx stack uniq term =
 and verifyTermination cases =
   let fvc p b = List.init (countFvOfPattern p) (fun _ -> b) in
   let rec verify dom codom t =
-    let self = dom |> List.length |> ((+) 1) in
+    let self = dom |> List.length in
     let res = 
       match t with
         | UTmApply (UTmBoundVar f, UTmBoundVar x :: _) when (f = self) ->
@@ -383,7 +383,7 @@ and verifyTermination cases =
   in cases |> List.forall (fun (ptn, bdy) ->
       match ptn with
         | UTmConstruct _ -> verify (fvc ptn true) (fvc ptn true) bdy
-        | _ -> verify [] [] bdy
+        | _ -> verify (fvc ptn true) [] bdy
     )
 
 and reconFromPatterns mth ctx uniq =
