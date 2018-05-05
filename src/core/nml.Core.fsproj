@@ -11,7 +11,6 @@
     <Compile Include="ast.fs" />
     <Compile Include="helper.fs" />
     <Compile Include="context.fs" />
-    <Compile Include="context2.fs" />
     <Compile Include="typer.fs" />
     <Compile Include="parser.fs" />
     <Compile Include="builtin.fs" />
