@@ -8,23 +8,23 @@ open nml.UniversalContext
 open Microsoft.FSharp.Collections
 open System
 
-let DefType t =
-  TypeContext t
+let DefType name t =
+  TypeContext (name, t)
 
 let DefTypeOp name printer =
-  TypeContext (TypeOp (name, [], printer))
+  TypeContext (name, TypeOp (name, [], printer))
 
 let DefVariant name ts =
-  TypeContext (Variant (name, [], ts))
+  TypeContext (name, Variant (name, [], ts))
 
 let DefInductiveVariant name f =
-  TypeContext (InductiveVariant (name, [], f))
+  TypeContext (name, InductiveVariant (name, [], f))
 
 let DefPolyVariant name targs ts =
-  TypeContext (Variant (name, targs |> List.map TypeVar, ts))
+  TypeContext (name, Variant (name, targs |> List.map TypeVar, ts))
 
 let DefPolyInductiveVariant name targs f =
-  TypeContext (InductiveVariant (name, targs |> List.map TypeVar, f))
+  TypeContext (name, InductiveVariant (name, targs |> List.map TypeVar, f))
 
 let builtinTypes = [
   DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TypeVar "a"]); NewConst ("None", []) ];
@@ -37,14 +37,14 @@ let impossible = UTmLiteral LUnit
 
 let DefFun name targs tret f =
   let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (foldFun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = foldFun targs tret in
+  let e xs = UTmApply (ExternalFun name (foldFun Fun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
+  let t = foldFun Fun targs tret in
   TermContext (name, t, ExternalFun name t e)
 
 let DefPolyFun name tas targs tret f =
   let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (Scheme (set tas, foldFun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = Scheme (set tas, foldFun targs tret) in
+  let e xs = UTmApply (ExternalFun name (Scheme (set tas, foldFun Fun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
+  let t = Scheme (set tas, foldFun Fun targs tret) in
   TermContext (name, t, ExternalFun name t e)
 
 let DefRawTerm name term =
@@ -61,7 +61,7 @@ let DefRawTerm name term =
 
 let DefRawCode name s =
   try
-    let t = parseTerm s |> toUntypedTerm builtinTypes in
+    let t = TermParser.parse s |> TermParser.toUntypedTerm builtinTypes in
     let (t', tt) = inferWithContext builtinTypes t in
     let fv = fvOf tt in
     if (Set.count fv > 0) then

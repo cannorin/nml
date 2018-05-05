@@ -24,7 +24,7 @@ type Type =
       | DataType (n, [], _, _) -> n
       | DataType (n, ts, _, EValue (c, f)) -> sprintf f (ts |> List.map to_sc |> String.concat c)
       | DataType (n, ts, _, _)
-      | DataTypeSelf (n, ts) -> sprintf "%s %s" (ts |> List.map to_sc |> String.concat " ") n
+      | DataTypeSelf (n, ts) -> sprintf "%s %s" n (ts |> List.map to_sc |> String.concat " ")
       | Scheme (ts, t) -> sprintf "∀%s. (%s)" (ts |> String.concat ", ") (to_s t)
 and Constructor =
   { name: string; args: Type list; isRecursive: bool; }
@@ -127,13 +127,11 @@ type UntypedTerm =
 let ExternalFun nm typ f =
   UTmExternal({ name = nm; value = f }, typ)
 
+type TopLevel<'Term> =
+  | TopOpen of moduleName:string
+  | TopLet of name:string * tm:'Term
+  | TopDo of tm:'Term
+  | TopModule of name:string * stmts:TopLevel<'Term> list
+  | TopTypeDef of name:string * ty:Type
 
-(*
-type TopLevel =
-  | Open of string
-  | Module of string * TopLevel list
-  | TopLet of string * Type * ParsedTerm
-  | TypeDef of string * Type
-  | EntryPoint of ParsedTerm
-*)
-
+type TopLevel_InferredUTm = TopLevel<Type * UntypedTerm>

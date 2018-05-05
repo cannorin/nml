@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.27428.2011
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "nml.Core", "src/core/nml.Core.fsproj", "{4D10CCB5-AA05-41BD-B7BA-A36A40F73F87}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "nml.Core", "src\core\nml.Core.fsproj", "{4D10CCB5-AA05-41BD-B7BA-A36A40F73F87}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "nml.Interpreter", "src/interpreter/nml.Interpreter.fsproj", "{F08A3D3E-7B08-445F-A894-876D59689400}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "nml.Interpreter", "src\interpreter\nml.Interpreter.fsproj", "{F08A3D3E-7B08-445F-A894-876D59689400}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{79426D83-9C02-4E5A-9A57-C87DD175EE85}"
 	ProjectSection(SolutionItems) = preProject
@@ -22,6 +22,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{79
 		examples\variant_match.nml = examples\variant_match.nml
 	EndProjectSection
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nml.Testing", "nml.Testing\nml.Testing.fsproj", "{7C9A1A6F-4D99-4930-AC83-F15D2FEEFEC0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,6 +38,10 @@ Global
 		{F08A3D3E-7B08-445F-A894-876D59689400}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F08A3D3E-7B08-445F-A894-876D59689400}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F08A3D3E-7B08-445F-A894-876D59689400}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7C9A1A6F-4D99-4930-AC83-F15D2FEEFEC0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7C9A1A6F-4D99-4930-AC83-F15D2FEEFEC0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7C9A1A6F-4D99-4930-AC83-F15D2FEEFEC0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7C9A1A6F-4D99-4930-AC83-F15D2FEEFEC0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

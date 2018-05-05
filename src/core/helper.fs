@@ -66,11 +66,11 @@ let rec expandFun = function
   | x -> ([], x)
 
 // [a; b; c] d --> a -> b -> c -> d
-let rec foldFun args ret =
+let rec foldFun builder args ret =
   match args with
     | [] -> ret
     | a :: rest ->
-      Fun(a, ret |> foldFun rest)
+      builder (a, ret |> foldFun builder rest)
 
 let rec fvOf = function
   | TypeVar n -> set [n]

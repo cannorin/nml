@@ -16,8 +16,8 @@ let inline scan prompt = editor.Edit(prompt, "")
 
 let tryRun ctx code quiet =
   try
-    let e = parseTerm code in
-    let e' = e |> toUntypedTerm ctx in
+    let e = TermParser.parse code in
+    let e' = e |> TermParser.toUntypedTerm ctx in
     let (e'', te) = inferWithContext ctx e' in
     cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
     let rec loop t i =

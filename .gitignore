@@ -197,3 +197,4 @@ FakesAssemblies/
 
 .debug/
 **/*.metaproj
+nml.Testing/

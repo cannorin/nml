@@ -7,16 +7,18 @@
   <ItemGroup>
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="prelude.fs" />
+    <Compile Include="prelude2.fs" />
     <Compile Include="ast.fs" />
     <Compile Include="helper.fs" />
     <Compile Include="context.fs" />
+    <Compile Include="context2.fs" />
     <Compile Include="typer.fs" />
     <Compile Include="parser.fs" />
     <Compile Include="builtin.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FParsec" Version="1.0.4-RC3" />
+    <PackageReference Include="FParsec" Version="1.0.3" />
   </ItemGroup>
 
 </Project>

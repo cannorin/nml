@@ -227,7 +227,7 @@ let rec recon ctx stack uniq term =
       let (l', tl, uniq, cstr1) = recon ctx stack uniq l in
       let (rs', trs, uniq, cstr2) = multiRecon uniq rs in
       let (nv, uniq) = genUniq uniq in
-      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun trs (TypeVar nv), UTmApply (l', rs')) :: [])
+      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun Fun trs (TypeVar nv), UTmApply (l', rs')) :: [])
 
     | UTmLiteral l -> 
       match l with
