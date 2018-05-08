@@ -2,7 +2,7 @@ module nml.Evaluation
 
 open nml.Ast
 open nml.Helper
-open nml.UniversalContext
+open nml.Contexts
 open Microsoft.FSharp.Collections
 
 let isValue t =
@@ -34,9 +34,9 @@ let rec shift c d = function
 type EvalMode = Reduce | Replace | Run
 let inline isReplace x = match x with | Replace -> true | _ -> false
 
-let rec e ctx stack mode = function
+let rec e (ctx: Context<UntypedTerm>) stack mode = function
   | UTmFreeVar name ->
-    ctx |> Map.tryFind name ?| UTmFreeVar name
+    ctx |> Context.findTerm name ?| UTmFreeVar name
   | UTmBoundVar i when (i < List.length stack) ->
     stack.[i] ?| UTmBoundVar i
   
@@ -45,17 +45,17 @@ let rec e ctx stack mode = function
   
   | UTmLet (name, value, body) ->
     if (mode |> isReplace) then
-      UTmLet (name, value |> e ctx stack mode, body |> e (ctx |> Map.remove name) stack mode)
+      UTmLet (name, value |> e ctx stack mode, body |> e (ctx |> Context.removeTerm name) stack mode)
     else
-      body |> e (ctx |> Map.add name (value |> e ctx stack mode)) stack mode
+      body |> e (ctx |> Context.addTerm name (value |> e ctx stack mode)) stack mode
   | UTmLetDefer _ ->
     failwith "impossible_e"
 
   | UTmTuple xs ->
     xs |> List.map (e ctx stack mode) |> UTmTuple
-  | UTmConstruct ("Succ", [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
-  | UTmConstruct ("Succ", [x]) ->
-    UTmApply (UTmFreeVar "+", [UTmLiteral (LNat 1u); x |> e ctx stack mode]) |> e ctx stack mode
+  | UTmConstruct (["Succ"], [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
+  | UTmConstruct (["Succ"], [x]) ->
+    UTmApply (UTmFreeVar ["+"], [UTmLiteral (LNat 1u); x |> e ctx stack mode]) |> e ctx stack mode
   | UTmConstruct (name, xs) ->
     UTmConstruct (name, xs |> List.map (e ctx stack mode))
   
@@ -63,7 +63,7 @@ let rec e ctx stack mode = function
   | UTmApply (UTmApply (l, rs1), rs2) ->
     UTmApply (l, List.append rs1 rs2) |> e ctx stack mode
   | UTmApply (UTmFreeVar n, rs) ->
-    match (ctx |> Map.tryFind n) with
+    match (ctx |> Context.findTerm n) with
       | Some l -> UTmApply (l, rs) |> e ctx stack mode
       | None -> UTmApply (UTmFreeVar n, rs |> List.map (e ctx stack mode))
   | UTmApply (UTmBoundVar i, rs) when (i < List.length stack) ->

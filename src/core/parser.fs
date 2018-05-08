@@ -4,7 +4,7 @@ open FParsec
 open nml.Ast
 open nml.Typer
 open nml.Helper
-open nml.UniversalContext
+open nml.Contexts
 open FSharp.Collections
 open System
 
@@ -28,6 +28,7 @@ let identifier : Parser<string, unit> =
       Reply(Error, expectedIdentifier)
 
 let name = identifier
+let qualified_name = sepBy1 name (pstring ".")
 
 let inline prepareOpp op_chars op_reserved op2Handler =
   let opp = new OperatorPrecedenceParser<'t, string, unit>()
@@ -57,8 +58,8 @@ let inline prepareOpp op_chars op_reserved op2Handler =
 module TypeParser =
 
   type ParsedType =
-    | PTyVar of string
-    | PTyApp of string * ParsedType list
+    | PTyVar of qualified_name
+    | PTyApp of qualified_name * ParsedType list
     | PTyFun of ParsedType * ParsedType
     | PTyTuple of ParsedType * ParsedType
     | PTyDefer of ParsedType
@@ -66,31 +67,34 @@ module TypeParser =
 
   let rec toKnownType ctx =
     function
-      | PTyVar "Unit" -> Unit
-      | PTyVar "Bool" -> Bool
+      | PTyVar ["Unit"] -> Unit
+      | PTyVar ["Bool"] -> Bool
       | PTyVar x ->
-        match (ctx |> findType x) with
+        match (ctx |> Context.findType x) with
           | Some (DataType (_, [], cts, p)) ->
             DataType (x, [], cts, p)
-          | Some (DataType _) ->
-            sprintf "Insufficient type argument(s) for type constructor '%s'" x |> ParserFailed |> raise
+          | Some (DataTypeSelf (_, [])) ->
+            DataTypeSelf (x, [])
+          | Some (DataType _)
+          | Some (DataTypeSelf _) ->
+            sprintf "Insufficient type argument(s) for type constructor '%s'" (sprint_qualified x) |> ParserFailed |> raise
           | Some t -> t
           | None ->
-            TypeVar x
+            match x with
+              | [v] -> TypeVar v
+              | _ -> sprintf "Unknown type '%s'" (sprint_qualified x) |> ParserFailed |> raise
       | PTyDefer x -> Deferred (toKnownType ctx x)
       | PTyFun (a, b) -> Fun (toKnownType ctx a, toKnownType ctx b)
       | PTyTuple (l, r) ->
         match (r, toKnownType ctx r) with
-          | PTyTuple _, DataType ("*", ts, _, _) ->
+          | PTyTuple _, DataType (["*"], ts, _, _) ->
             TTuple (toKnownType ctx l :: ts)
           | _, x -> TTuple [toKnownType ctx l; x]
       | PTyApp (name, ts) ->
-        match (ctx |> findType name) with
+        match (ctx |> Context.findType name) with
           | Some (DataType (_, vts, cts, p)) ->
-            if (List.length vts = 0) then
-              sprintf "Tthe type '%s' does not take type argument(s)" name |> ParserFailed |> raise
-            else if (List.length ts <> List.length vts) then
-              sprintf "The length of type argument(s) is not correct for type constructor '%s'" name |> ParserFailed |> raise
+            if (List.length ts <> List.length vts) then
+              sprintf "The length of type argument(s) is not correct for type constructor '%s'" (sprint_qualified name) |> ParserFailed |> raise
             
             let ts = ts |> List.map (toKnownType ctx)
             let asgn = 
@@ -100,8 +104,13 @@ module TypeParser =
                   |> Assign in
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
             DataType (name, ts, cts', p)
+          | Some (DataTypeSelf (_, vts)) ->
+            if List.length ts = List.length vts then
+              DataTypeSelf (name, ts |> List.map (toKnownType ctx))
+            else
+              sprintf "The length of type argument(s) is not correct for type constructor '%s'" (sprint_qualified name) |> ParserFailed |> raise 
           | _ ->
-            sprintf "Unknown datatype: '%s'" name |> ParserFailed |> raise
+            sprintf "Unknown datatype: '%s'" (sprint_qualified name) |> ParserFailed |> raise
       | PTyExplicit x -> toKnownType ctx x
 
   let typ, tyRef = createParserForwardedToRef<ParsedType, unit>()
@@ -122,7 +131,7 @@ module TypeParser =
           | "*" ->
             PTyTuple (expr1, expr2)
           | x ->
-            PTyApp (x, [expr1; expr2]))
+            PTyApp ([x], [expr1; expr2]))
   
   // the operator definitions:
   do
@@ -139,7 +148,7 @@ module TypeParser =
     addOp2Ext "/"  50 Associativity.Left
   // end of definitions.
 
-  let type_var = ws name |>> PTyVar
+  let type_var = ws qualified_name |>> PTyVar
 
   let type_app, taRef = createParserForwardedToRef<ParsedType, unit>()
 
@@ -176,7 +185,7 @@ module TypeParser =
 module TermParser =
 
   type ParsedTerm =
-    | PTmVar of string
+    | PTmVar of qualified_name
     | PTmLiteral of Literal
     | PTmTuple of ParsedTerm list
     | PTmList of ParsedTerm list
@@ -200,23 +209,26 @@ module TermParser =
     and tot stack = function
       | PTmVar x ->
         // constructor without arguments
-        if (ctx |> findConstructor x (Some []) |> Option.isSome) then
+        if (ctx |> Context.findConstructor x (Some []) |> Option.isSome) then
           UTmConstruct (x, [])
         else
-          match (stack |> List.tryFindIndex ((=) x)) with
-            | Some i -> UTmBoundVar i
-            | None -> UTmFreeVar x
+          match x with
+            | [v] ->
+              match (stack |> List.tryFindIndex ((=) v)) with
+                | Some i -> UTmBoundVar i
+                | None -> UTmFreeVar x
+            | _ -> UTmFreeVar x
       | PTmLiteral l -> UTmLiteral l
       | PTmTuple xs -> UTmTuple (xs |> List.map (tot stack))
-      | PTmList [] -> UTmConstruct ("Nil", [])
-      | PTmList xs -> xs |> List.rev |> List.fold (fun l x -> UTmConstruct ("Cons", [tot stack x; l])) (UTmConstruct ("Nil", []))
+      | PTmList [] -> UTmConstruct (["Nil"], [])
+      | PTmList xs -> xs |> List.rev |> List.fold (fun l x -> UTmConstruct (["Cons"], [tot stack x; l])) (UTmConstruct (["Nil"], []))
       | PTmFun (arg, body) -> UTmFun (body |> tot (arg :: stack))
       | PTmFunUnit body -> UTmFun (body |> tot ("" :: stack))
       // immediate constructor handling
-      | PTmApply (PTmVar x, PTmTuple xs) when (ctx |> findConstructor x (Some xs) |> Option.isSome) ->
+      | PTmApply (PTmVar x, PTmTuple xs) when (ctx |> Context.findConstructor x (Some xs) |> Option.isSome) ->
         UTmConstruct (x, xs |> List.map (tot stack))
       // immediate constructor handling
-      | PTmApply (PTmVar x, y) when (ctx |> findConstructor x (Some [y]) |> Option.isSome)  ->
+      | PTmApply (PTmVar x, y) when (ctx |> Context.findConstructor x (Some [y]) |> Option.isSome)  ->
         UTmConstruct (x, [y |> tot stack])
       | PTmApply (l, r) ->
         match (l |> tot stack) with
@@ -230,7 +242,7 @@ module TermParser =
         UTmLetDefer (x, r |> tot stack, b |> tot stack)
         // UTmDefer (PTmLet (x, PTmRun r, b) |> tot stack)
       | PTmOp2 (l, op, r) ->
-        PTmApply (PTmApply (PTmVar op, l), r) |> tot stack
+        PTmApply (PTmApply (PTmVar [op], l), r) |> tot stack
       | PTmIf (x, t, e) ->
         PTmMatch (x, [ (PTmLiteral (LBool true), t); (PTmLiteral (LBool false), e) ]) |> tot stack
       | PTmMatch (x, cs) ->
@@ -281,7 +293,7 @@ module TermParser =
 
   let unitparam = syn "()" |>> (fun x -> [x])
 
-  let variable = ws (name <|> opvar) |>> PTmVar
+  let variable = ws (qualified_name <|> (opvar |>> List.singleton)) |>> PTmVar
   let literal_nat = ws puint32 <?> "Nat" |>> (LNat >> PTmLiteral)
   let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |>> (LBool >> PTmLiteral)
   let literal_unit = syn "()" >>% PTmLiteral LUnit
@@ -329,7 +341,7 @@ module TermParser =
 
   let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. matchpatterns) |>> PTmMatch
 
-  let expr_function = (syn "function" >>. matchpatterns) |>> (fun cases -> PTmFun ("x", PTmMatch (PTmVar "x", cases)))
+  let expr_function = (syn "function" >>. matchpatterns) |>> (fun cases -> PTmFun ("x", PTmMatch (PTmVar ["x"], cases)))
 
   let expr_fixpoint = tuple2 (syn "fixpoint" >>. ws name) (syn "of" >>. matchpatterns) |>> PTmFixMatch
 
@@ -387,15 +399,56 @@ let inline parseBy parser text =
 module TopLevelParser =
   open TermParser
   open TypeParser
+  open System.Runtime.InteropServices.ComTypes
 
   type PTTypeKind = PTTKVariant | PTTKInductive
 
   type ParsedTopLevel =
-    | PTopOpen of string
+    | PTopOpen of qualified_name
     | PTopModule of string * ParsedTopLevel list
-    | PTopLet of string * ParsedTerm
-    | PTopTypeDef of kind: PTTypeKind * name:string * tyParams:string list * cstrs: (string * ParsedType) list
+    | PTopLet of string * string list * ParsedTerm
+    | PTopTypeDef of kind: PTTypeKind * name:string * tyParams:string list * cstrs: (string * ParsedType option) list
     | PTopDo of ParsedTerm
+
+  let rec toToplevelAndNewContext ctx (moduleName: qualified_name) =
+    let inline (+>>) x (xs, ctx) = (x :: xs, ctx)
+    let inline orEmpty x = x |> Option.defaultValue (DataType (["*"], [], [], ENull))
+    function
+      | toplevel :: remaining ->
+        match toplevel with
+          | PTopOpen qn ->
+            TopOpen qn +>> toToplevelAndNewContext (ctx |> Context.openModule qn) moduleName remaining
+          | PTopModule (name, toplevels) ->
+            let top = TopModule(name, toplevels |> toToplevelAndNewContext ctx (moduleName @ [name]) |> fst)
+            top +>> toToplevelAndNewContext (ctx |> Context.addToplevels [top] (fun _ -> id)) moduleName remaining
+          | PTopLet (name, args, pt) ->
+            let tm =
+              TermParser.makeFun (args, pt)
+                 |> TermParser.toUntypedTerm ctx
+            let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
+            TopLet (name, (ty, tm)) +>> toToplevelAndNewContext (ctx |> Context.addTerm name (ty, tm)) moduleName remaining
+          | PTopDo pt ->
+            let tm = TermParser.toUntypedTerm ctx pt
+            let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
+            TopDo (ty, tm) +>> toToplevelAndNewContext ctx moduleName remaining
+          | PTopTypeDef (kind, name, typrms, cstrs) ->
+            let ctx' =
+              match kind with
+                | PTTKVariant -> ctx
+                | PTTKInductive -> ctx |> Context.addType name (DataTypeSelf(moduleName @ [name], typrms |> List.map TypeVar))
+            let cstrs' =
+              cstrs |> List.map (fun (n, pt) -> (n, pt |> Option.map (TypeParser.toKnownType ctx') |> orEmpty))
+                    |> List.map (fun (n, ty) ->
+                        match ty with
+                          | DataType (["*"], ts, [], _) ->
+                            { name = n; args = ts; isRecursive = false }
+                          | _ ->
+                            { name = n; args = [ty]; isRecursive = false }
+                       )
+            let ty = DataType(moduleName @ [name], typrms |> List.map TypeVar, cstrs', ENull)
+            TopTypeDef(name, ty) +>> toToplevelAndNewContext (ctx |> Context.addType name ty) moduleName remaining
+      | [] -> ([], ctx)
+          
 
   let until sym parser : Parser<_, unit> =
     let s = charsTillString sym true Int32.MaxValue
@@ -419,16 +472,18 @@ module TopLevelParser =
   
   let toplevel, tlRef = createParserForwardedToRef<ParsedTopLevel, unit>()
 
-  let toplevel_open = syn "open" >>. ws name .>> syn ";;" |>> PTopOpen
+  let toplevel_open = syn "open" >>. ws qualified_name .>> syn ";;" |>> PTopOpen
 
   let toplevel_module = tuple2 (syn "module" >>. ws name) (syn "=" >>. syn "begin" >>. (sepEndBy toplevel spaces1 .>> syn "end")) |>> PTopModule
 
-  let toplevel_let = tuple2 (syn "let" >>. (ws name)  .>> syn "=") (TermParser.parse |> until ";;") |>> PTopLet
+  let toplevel_let = tuple2 (syn "let" >>. ws name <+> (unitparam <|> sepEndBy name spaces1) .>> syn "=") (TermParser.parse |> until ";;") |>> (fun (name :: args, body) -> PTopLet (name, args, body))
+
+  let variantCase = (tuple2 (ws name) ( (syn "of" >>. typ |>> Some) <|> (syn "" |>> fun _ -> None) ))
 
   let toplevel_variantdef = 
     tuple2 (syn "variant" >>. sepEndBy1 name spaces1)
            (syn "=" >>. (syn "|" <|> syn "") >>. 
-              until "end" (String.splitBy "|" >> Array.map (parseBy (tuple2 (ws name .>> syn "of") typ) ) >> List.ofArray )
+              until "end" (String.splitBy "|" >> Array.map (parseBy variantCase) ) |>> List.ofArray
            )
       |>> function
         | name :: tprms, xs -> PTopTypeDef(PTTKVariant, name, tprms, xs)
@@ -437,7 +492,7 @@ module TopLevelParser =
   let toplevel_inductivedef = 
     tuple2 (syn "inductive" >>. sepEndBy1 name spaces1) 
            (syn "=" >>. (syn "|" <|> syn "") >>. 
-              until "end" (String.splitBy "|" >> Array.map (parseBy (tuple2 (ws name .>> syn "of") typ) ) >> List.ofArray )
+              until "end" (String.splitBy "|" >> Array.map (parseBy variantCase) ) |>> List.ofArray
            )
       |>> function
         | name :: tprms, xs -> PTopTypeDef(PTTKInductive, name, tprms, xs)
@@ -455,7 +510,7 @@ module TopLevelParser =
       attempt (TermParser.parse |> until ";;" |>> PTopDo)
     ]
 
-  let implicitModule = sepEndBy toplevel spaces |>> (fun xs -> PTopModule ("_", xs))
+  let implicitModule = sepEndBy toplevel spaces
 
   let parse text =
     match run (spaces >>. implicitModule .>> spaces .>> eof) text with

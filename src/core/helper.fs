@@ -8,9 +8,9 @@ let argsmap f c =
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
-      | (UTmConstruct ("Succ", [pred]), UTmLiteral (LNat n)) when n > 0u ->
+      | (UTmConstruct (["Succ"], [pred]), UTmLiteral (LNat n)) when n > 0u ->
         mt pred (UTmLiteral (LNat (n - 1u)))
-      | (UTmConstruct ("0", []), UTmLiteral (LNat 0u)) ->
+      | (UTmConstruct (["0"], []), UTmLiteral (LNat 0u)) ->
         []
       | (UTmTuple xs, UTmTuple ys) ->
         ys |> List.map2 mt xs |> List.concat
@@ -18,7 +18,7 @@ let matchPattern pat t =
         ys |> List.map2 mt xs |> List.concat
       | (UTmLiteral x, UTmLiteral y) when x = y ->
         []
-      | (UTmFreeVar "_", y) -> []
+      | (UTmFreeVar ["_"], y) -> []
       | (UTmBoundVar x, y) -> [(x, y)]
       | _ -> failwith "matchfailed"
   in 
@@ -28,8 +28,8 @@ let matchPattern pat t =
     | _ -> None
 
 let rec expandCases = function
-  | UTmApply (UTmFreeVar "::", [l; r]) -> UTmConstruct ("Cons", [expandCases l; expandCases r])
-  | UTmLiteral (LNat 0u) -> UTmConstruct ("0", [])
+  | UTmApply (UTmFreeVar ["::"], [l; r]) -> UTmConstruct (["Cons"], [expandCases l; expandCases r])
+  | UTmLiteral (LNat 0u) -> UTmConstruct (["0"], [])
   | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
   | x -> x
 
@@ -113,7 +113,7 @@ let rec isInductive vt =
     | _ -> Some false
 
 let rec fvOfTerm = function
-  | UTmFreeVar x when x <> "_" -> set [x]
+  | UTmFreeVar [x] when x <> "_" -> set [x]
   | UTmApply (l, rs) ->
     l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
   | UTmTuple xs

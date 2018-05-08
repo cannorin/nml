@@ -46,7 +46,14 @@ let inline handle_op s =
   else
     s
 
+let inline sprint_qualified xs =
+  xs |> List.map handle_op |> String.concat "."
+
+let inline namespaceof qualified = qualified |> List.take (List.length qualified - 1)
+
 let inline listen x =
   printfn "%s" (to_s x);
   x
 
+let inline indent i str =
+  String.replicate i " " + str

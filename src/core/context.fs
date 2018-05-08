@@ -1,98 +1,116 @@
-module nml.UniversalContext
+module nml.Contexts
 
 open nml.Ast
 open nml.Helper
 open Microsoft.FSharp.Collections
 
-type ContextItem =
+type Qualified<'Item> = Qualified of 'Item * string list
+
+type ContextItem<'Term> =
   | TypeContext of string * Type
-  | ModuleContext of string * ContextItem list
-  | TermContext of string * Type * UntypedTerm
+  | ModuleContext of string * ContextItem<'Term> list
+  | TermContext of string * 'Term
 
-type Context = ContextItem list
+type Context<'Term> = ContextItem<'Term> list
 
-let printContext ctx =
-  for x in ctx do
-    match x with
-      | TypeContext (_, DataType (name, targs, cts, _)) ->
-        let s = List.concat [targs |> List.map to_s; [name]] |> String.concat " " in
-        let cs = 
-          cts |> List.map ((fun c -> 
-              if (List.length c.args > 0) then
-                sprintf "%s of %s" c.name (c.args |> List.map to_s |> String.concat " * ") 
-              else c.name
-            )) |> String.concat " | "
-        in
-        if (String.length cs > 0) then
-          printfn "- type %s = %s" s cs
-        else
-          printfn "- type %s" s
-      | TypeContext (name, ty) -> printfn "- type %s = %s" name (to_s ty)
-      | TermContext (n, ty, te) ->
-        printfn "- let %s : %s" (handle_op n) (to_s ty)
-      | ModuleContext (n, _) -> printfn "- module %s = begin .. end" n
+type InferredTermContext = Context<UntypedTerm * Type>
 
-let findType name ctx =
-  ctx |> List.choose (function | TypeContext (nm, t) when nm = name -> Some t | _ -> None) |> List.tryHead
+type TyperContext = Context<Type>
 
-let findConstructor<'a> name (args : 'a list option) ctx =
-  let al = args |> Option.map List.length in
-  ctx 
-    |> List.choose (function 
-        | TypeContext (_, DataType (vs, targs, ts, _)) ->
-          ts 
-            |> List.tryFind (fun c -> c.name = name && (al |> Option.map ((=) (List.length c.args)) ?| true))
-            |> Option.map (fun c -> (DataType (vs, targs, ts, ENull), c.args))
-        | _ -> None
-      )
-    |> List.tryHead
+type EvalContext = Context<UntypedTerm>
 
-let rec findInModule names ctx =
-  match names with
-    | name :: [] -> 
-      ctx |> List.choose (function | TermContext (s, t, u) when name = s -> Some (t, u) | _ -> None )
-          |> List.tryHead
-    | mdl :: names ->
-      ctx |> List.choose (function 
-              | ModuleContext (nm, ctx) when nm = mdl ->
-                findInModule names ctx
-              | _ -> None
-             )
-          |> List.tryHead
-    | [] -> None
-      
+module Context =
+  open System
 
-let toTyperMap ctx =
-  ctx
-    |> List.choose (function | TermContext (n, t, _) -> Some (n, t) | _ -> None)
-    |> List.rev |> Map.ofList |> Map.toList
+  let rec termMap f ctx =
+    ctx |> List.map (function
+            | TermContext (name, tm) -> TermContext (name, f tm)
+            | TypeContext (name, ty) -> TypeContext (name, ty)
+            | ModuleContext (name, ctx) -> ModuleContext (name, termMap f ctx)
+           )
+  
+  let rec tryFindRec chooser (qualifiedName: qualified_name) ctx =
+    match qualifiedName with
+      | [] -> None
+      | name :: [] ->
+        ctx |> List.choose (chooser name)
+            |> List.tryHead
+      | modName :: qualifiedName ->
+        ctx |> List.choose (function | ModuleContext (n, ctx) when n = modName -> Some ctx | _ -> None)
+            |> List.choose (tryFindRec chooser qualifiedName)
+            |> List.tryHead
+  
+  let inline findTerm qualifiedName ctx =
+    tryFindRec (fun name -> function | TermContext (n, tm) when n = name -> Some tm | _ -> None) qualifiedName ctx
 
-let toEvalContext ctx =
-  ctx
-    |> List.choose (function | TermContext (n, _, t) -> Some (n, t) | _ -> None)
-    |> Map.ofList
+  let inline findType qualifiedName ctx =
+    tryFindRec (fun name -> function | TypeContext (n, ty) when n = name -> Some ty | _ -> None) qualifiedName ctx
 
-let typerFind name ctx =
-  ctx 
-    |> List.choose (function | TermContext (s, t, _) when name = s -> Some t | _ -> None )
-    |> List.tryHead
+  let inline findConstructor qualifiedName (args: 'a list option) ctx =
+    let aLen = args |> Option.map List.length
+    tryFindRec (fun name ->
+                  function
+                    | TypeContext (tyname, DataType (vs, targs, ts, p)) ->
+                      ts |> List.tryFind (fun c -> c.name = name && aLen |> Option.map ((=) (List.length c.args)) ?| true)
+                         |> Option.map (fun c -> (DataType (vs, targs, ts, p), c.args))
+                    | _ -> None
 
-let evalFind name ctx =
-  ctx
-    |> List.choose (function | TermContext (s, _, t) when name = s -> Some t | _ -> None )
-    |> List.tryHead
+               ) qualifiedName ctx
 
-(*
-let findModule mdfrs ctx =
-  ctx 
-    |> List.choose (function
-        | TopLevelContext (Module (m, ts)) when m = mdfrs -> Some (Module (m, ts))
-        | _ -> None
-      )
-    |> List.tryHead
-*)
+  let inline findModule qualifiedName ctx =
+    tryFindRec (fun name -> function | ModuleContext (nm, ctx') when nm = name -> Some ctx' | _ -> None) qualifiedName ctx |> Option.defaultValue []
 
-let typerAdd name t ctx =
-  TermContext (name, t, UTmFreeVar name) :: (ctx |> List.filter (function | TermContext (s, _, _) -> s <> name | _ -> true ))
+  let inline openModule qualifiedName ctx =
+    findModule qualifiedName ctx @ ctx
 
+  let inline addTerm name tm ctx = TermContext (name, tm) :: ctx
 
+  let inline removeTerm name ctx =
+    let mutable skipped = false
+    ctx |> List.filter (function | TermContext (n, _) when n = name && not skipped -> skipped <- true; false | _ -> true)
+
+  let inline addType name ty ctx =
+    TypeContext (name, ty) :: ctx
+
+  let addToplevels toplevels evaluator ctx =
+    let rec at tls _targetCtx _ctx =
+      match tls with
+        | [] -> _targetCtx
+        | toplevel :: remainings ->
+          match toplevel with
+            | TopOpen name ->
+              let _ctx' = openModule name _ctx
+              at remainings _targetCtx _ctx'
+            | TopTypeDef (name, ty) ->
+              let extend c =
+                TypeContext (name, ty) :: c
+              at remainings (extend _targetCtx) (extend _ctx)
+            | TopModule (name, subtls) ->
+              let extend c =
+                ModuleContext (name, at subtls [] _ctx) :: c
+              at remainings (extend _targetCtx) (extend _ctx)
+            | TopLet (name, tm) ->
+              let extend c =
+                TermContext (name, evaluator ctx tm) :: c
+              at remainings (extend _targetCtx) (extend _ctx)
+            | TopDo tm ->
+              evaluator ctx tm |> ignore
+              at remainings _targetCtx _ctx
+    at toplevels ctx ctx
+
+  let toTyperMap ctx =
+    ctx
+      |> List.choose (function | TermContext (n, t) -> Some (n, t) | _ -> None)
+      |> List.rev |> Map.ofList |> Map.toList
+  
+  let print ctx = 
+    let rec p idt cs = [
+        for c in cs do
+          yield!
+            match c with
+              | TypeContext (name, ty) -> [ sprintf "type %s = %s" (handle_op name) (to_s ty) |> indent idt ]
+              | TermContext (name, (ty, _)) -> [ sprintf "let %s : %s"  (handle_op name) (to_s ty) |> indent idt ]
+              | ModuleContext (name, cs') ->
+                (sprintf "module %s =" name |> indent idt) :: p (idt + 2) cs'
+      ]
+    p 0 ctx |> String.concat Environment.NewLine

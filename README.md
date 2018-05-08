@@ -68,7 +68,7 @@ Note that each computation in each stage is kept pure functional; everything imp
 ## Practical things
 
 - [x] Polymorphism
-    - [x] Let expression
+    - [x] Let expressions
     - [x] Type operators (eg. tuples)
     - [x] Forall quantifier
 - [x] Variants
@@ -79,11 +79,12 @@ Note that each computation in each stage is kept pure functional; everything imp
     - [x] Exhaustiveness check
     - [x] Matching functions (```function```)
 - [x] Operators
-    - [x] Operator definition (```let (+) l r = ...```)
+    - [x] Operator definitions (```let (+) l r = ...```)
     - [x] Use as a function
-- [ ] Top-level expressions
-    - [ ] Type definition
-    - [ ] Modules
+- [x] Top-level expressions
+    - [x] Let/Do expressions
+    - [x] Type definitions
+    - [x] Define/Open modules
     - [ ] On REPL
 
 ## Type system extensions

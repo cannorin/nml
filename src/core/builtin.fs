@@ -4,7 +4,7 @@ open nml.Ast
 open nml.Parser
 open nml.Typer
 open nml.Helper
-open nml.UniversalContext
+open nml.Contexts
 open Microsoft.FSharp.Collections
 open System
 
@@ -12,19 +12,19 @@ let DefType name t =
   TypeContext (name, t)
 
 let DefTypeOp name printer =
-  TypeContext (name, TypeOp (name, [], printer))
+  TypeContext (name, TypeOp ([name], [], printer))
 
 let DefVariant name ts =
-  TypeContext (name, Variant (name, [], ts))
+  TypeContext (name, Variant ([name], [], ts))
 
 let DefInductiveVariant name f =
-  TypeContext (name, InductiveVariant (name, [], f))
+  TypeContext (name, InductiveVariant ([name], [], f))
 
 let DefPolyVariant name targs ts =
-  TypeContext (name, Variant (name, targs |> List.map TypeVar, ts))
+  TypeContext (name, Variant ([name], targs |> List.map TypeVar, ts))
 
 let DefPolyInductiveVariant name targs f =
-  TypeContext (name, InductiveVariant (name, targs |> List.map TypeVar, f))
+  TypeContext (name, InductiveVariant ([name], targs |> List.map TypeVar, f))
 
 let builtinTypes = [
   DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TypeVar "a"]); NewConst ("None", []) ];
@@ -39,22 +39,22 @@ let DefFun name targs tret f =
   let (_, timeret) = getTimeOfType tret
   let e xs = UTmApply (ExternalFun name (foldFun Fun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
   let t = foldFun Fun targs tret in
-  TermContext (name, t, ExternalFun name t e)
+  TermContext (name, (t, ExternalFun name t e))
 
 let DefPolyFun name tas targs tret f =
   let (_, timeret) = getTimeOfType tret
   let e xs = UTmApply (ExternalFun name (Scheme (set tas, foldFun Fun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
   let t = Scheme (set tas, foldFun Fun targs tret) in
-  TermContext (name, t, ExternalFun name t e)
+  TermContext (name, (t, ExternalFun name t e))
 
 let DefRawTerm name term =
   try
-    let (t', tt) = inferWithContext builtinTypes term in
+    let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) term in
     let fv = fvOf tt in
     if (Set.count fv > 0) then
-      TermContext (name, Scheme (fv, tt), t')
+      TermContext (name, (Scheme (fv, tt), t'))
     else
-      TermContext (name, tt, t')
+      TermContext (name, (tt, t'))
   with
     | TyperFailed tf -> printTypeError tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
@@ -62,24 +62,24 @@ let DefRawTerm name term =
 let DefRawCode name s =
   try
     let t = TermParser.parse s |> TermParser.toUntypedTerm builtinTypes in
-    let (t', tt) = inferWithContext builtinTypes t in
+    let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) t in
     let fv = fvOf tt in
     if (Set.count fv > 0) then
-      TermContext (name, Scheme (fv, tt), t')
+      TermContext (name, (Scheme (fv, tt), t'))
     else
-      TermContext (name, tt, t')
+      TermContext (name, (tt, t'))
   with
     | ParserFailed msg -> sprintf "PARSER FAILED: %s" msg |> failwith
     | TyperFailed tf -> printTypeError tf; failwith ""
     | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
 
 let addTerm name term ctx =
-  let (t', tt) = inferWithContext ctx term in
+  let (t', tt) = inferWithContext (ctx |> Context.termMap fst) term in
   let fv = fvOf tt in
   if (Set.count fv > 0) then
-    TermContext (name, Scheme (fv, tt), t') :: ctx
+    TermContext (name, (Scheme (fv, tt), t')) :: ctx
   else
-    TermContext (name, tt, t') :: ctx
+    TermContext (name, (tt, t')) :: ctx
 
 let builtinTerms = [
   DefRawCode "id" "fun x -> x";
@@ -104,9 +104,9 @@ let builtinTerms = [
   DefFun "-?" [Nat; Nat] (TOption Nat) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
       if (a > b) then
-        UTmConstruct ("Some", [LNat (a - b) |> UTmLiteral])
+        UTmConstruct (["Some"], [LNat (a - b) |> UTmLiteral])
       else
-        UTmConstruct ("None", [])
+        UTmConstruct (["None"], [])
     | _ -> impossible
   );
   DefPolyFun "=" ["a"] [TypeVar "a"; TypeVar "a"] Bool (function
@@ -171,6 +171,14 @@ let builtinTerms = [
   DefRawCode "::" "fun x t -> Cons (x, t)";
 ]
 
-let defaultContext = List.append builtinTypes builtinTerms
+let testModule =
+  ModuleContext("Test",
+    [
+      TermContext("number", (Nat, UTmLiteral (LNat 42u)))
+      DefRawCode "succ2" "fun a -> Succ (Succ a)"
+    ]
+  )
+
+let defaultContext = testModule :: List.append builtinTypes builtinTerms
 
 ()

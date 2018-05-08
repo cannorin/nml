@@ -4,7 +4,7 @@ open nml.Parser
 open nml.Typer
 open nml.Helper
 open nml.Evaluation
-open nml.UniversalContext
+open nml.Contexts
 open nml.Builtin
 open Microsoft.FSharp.Collections
 open System
@@ -18,12 +18,12 @@ let tryRun ctx code quiet =
   try
     let e = TermParser.parse code in
     let e' = e |> TermParser.toUntypedTerm ctx in
-    let (e'', te) = inferWithContext ctx e' in
+    let (e'', te) = inferWithContext (ctx |> Context.termMap fst) e' in
     cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
     let rec loop t i =
-      let t' = t |> eval (ctx |> toEvalContext) in
+      let t' = t |> eval (ctx |> Context.termMap snd) in
       if (not quiet) then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t');
-      match (t' |> next (ctx |> toEvalContext)) with
+      match (t' |> next (ctx |> Context.termMap snd)) with
         | Reducible t'' -> loop t'' (i + 1)
         | Halted -> if quiet then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t') else ()
     in loop e'' 0
@@ -32,7 +32,7 @@ let tryRun ctx code quiet =
     | TyperFailed (UnifyFailed (a, b, ut)) ->
       printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
     | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" n
+      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
     | TyperFailed (NotMatchable (l, t, r)) ->
       printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
     | TyperFailed (TermWithMessage (f, t)) ->
@@ -56,7 +56,7 @@ let rec loop ctx inc =
   if (String.length i = 0) then
     loop ctx None
   else if (i = "showVars") then
-    ctx |> printContext;
+    ctx |> Context.print |> printfn "%s";
     printfn "";
     loop ctx None
   else
@@ -64,8 +64,53 @@ let rec loop ctx inc =
   printfn "";
   loop ctx None
 
+
+let inline debug () =
+
+  let code = @"
+variant YesNo a = 
+    Yes of a
+  | No
+end
+
+module YesNo = begin
+  let map f =
+    function
+      Yes x -> Yes (f x)
+    | No -> No
+  ;;
+
+  let filter p =
+    function
+      Yes x ->
+        if p x then Yes x else No
+    | No -> No
+  ;;
+end
+
+Yes 42 |> YesNo.map ((+) 1) |> YesNo.filter ((>) 30) ;;
+
+open YesNo;;
+
+let lessThan40 x = x |> filter ((<) 40) ;;
+
+"
+  let (toplevel, ctx) = 
+    code |> TopLevelParser.parse |> TopLevelParser.toToplevelAndNewContext defaultContext []
+
+  printfn "%s" (TopLevel<_>.print toplevel)
+  Console.ReadLine() |> ignore
+
+
+
 [<EntryPoint>]
 let main argv =
+
+#if DEBUG
+  debug ()
+  Environment.Exit 0;
+#endif
+
   match (argv |> Array.toList) with
     | "--quiet" :: filename :: _
     | filename :: _ when File.Exists filename ->
