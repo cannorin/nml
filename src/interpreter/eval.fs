@@ -144,7 +144,7 @@ let eval ctx t =
 type NextResult = Reducible of UntypedTerm | Halted of UntypedTerm
 
 let next ctx t =
-  match t with
+  match (eval ctx t) with
     | UTmDefer x -> Reducible x
     | x -> Halted x
 

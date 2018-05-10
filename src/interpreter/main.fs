@@ -17,65 +17,15 @@ open nml.Parser
 let editor = new LineEditor ("nml", 300)
 let inline scan prompt = editor.Edit(prompt, "")
 
-let tryRun ctx code quiet =
-  try
-    let e = TermParser.parse code in
-    let e' = e |> TermParser.toUntypedTerm ctx in
-    let (e'', te) = inferWithContext (ctx |> Context.termMap fst) e' in
-    cprintfn ConsoleColor.DarkGray "type: %s" (to_s te);
-    let rec loop t i =
-      let t' = t |> eval (ctx |> Context.termMap snd) in
-      if (not quiet) then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t');
-      match (t' |> next (ctx |> Context.termMap snd)) with
-        | Reducible t'' -> loop t'' (i + 1)
-        | Halted -> if quiet then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t') else ()
-    in loop e'' 0
-  with
-    | ParserFailed msg -> printfn "PARSER FAILED: %s" msg
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-    | TyperFailed (UnknownVar (n, ctx)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-    | TyperFailed (TermWithMessage (f, t)) ->
-      sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
-    | e -> printfn "NATIVE ERROR: %s" e.Message
-
-let rec loop ctx inc =
-  let i =
-    match inc with
-      | Some x ->
-        x + scan "- ";
-      | None ->
-        scan "> "
-  in
-  if (String.IsNullOrWhiteSpace i) then
-    loop ctx inc
-  else if (not <| i.Trim().EndsWith ";;") then
-    loop ctx (Some (i + "\n"))
-  let i = i.Trim() in
-  let i = i.Remove(i.Length - 2, 2) in
-  if (String.length i = 0) then
-    loop ctx None
-  else if (i = "showVars") then
-    ctx |> Context.print |> printfn "%s";
-    printfn "";
-    loop ctx None
-  else
-    tryRun ctx i false
-  printfn "";
-  loop ctx None
-
-
-let rec repl lines ctx =
-  let currentLine = Console.ReadLine() |> String.trim
+let rec repl lines ctx prompt =
+  let currentLine = scan prompt |> String.trim
   if String.IsNullOrWhiteSpace currentLine then
-    repl lines ctx
+    repl lines ctx prompt
   else
     let lines = currentLine :: lines
     let input = lines |> List.rev |> String.concat Environment.NewLine
-    let (lines', ctx') =
+    let reset = ([], ctx, "> ")
+    let (lines', ctx', prompt') =
       try
         let (tls, _) = TopLevelParser.parse input |> TopLevelParser.toToplevelAndNewContext ctx ["repl"]
         let rec e ctx runDefer t =
@@ -83,7 +33,7 @@ let rec repl lines ctx =
             | Halted result -> result
             | Reducible t ->
               if runDefer then UTmDefer (e ctx true t) else UTmDefer t
-        let ctx' =
+        let (ctx', tls') =
           let rec evalTop ctx newtls =
             function
               | [] -> (ctx, newtls)
@@ -96,6 +46,7 @@ let rec repl lines ctx =
                       TopLet (name, (ty, tm'))
                     | TopDo (ty, tm) ->
                       let tm' = e ctx true tm
+                      cprintfn ConsoleColor.DarkGray "----> %s" (to_s tm)
                       TopDo (ty, tm')
                     | TopOpen name -> TopOpen name
                     | TopModule (name, subtops) ->
@@ -104,29 +55,30 @@ let rec repl lines ctx =
                     | tydef ->
                       tydef
                 rest |> evalTop (ctx |> Context.addToplevels [newtl] id2) (newtl :: newtls)
-          evalTop ctx [] tls |> fst
-        ([], ctx')
+          evalTop ctx [] tls
+        TopLevel.print tls' |> printfn "%s"
+        ([], ctx', "> ")
       with 
-        | ParserFailedAtEof -> (lines, ctx)
+        | ParserFailedAtEof -> (lines, ctx, "- ")
         | ParserFailed msg ->
-          cprintfn ConsoleColor.Yellow "PARSER FAILED: %s" msg
-          ([], ctx)
+          printfn "PARSER FAILED: %s" msg
+          reset
         | TyperFailed (UnifyFailed (a, b, ut)) ->
           printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-          ([], ctx)
+          reset
         | TyperFailed (UnknownVar (n, _)) ->
           printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
-          ([], ctx)
+          reset
         | TyperFailed (NotMatchable (l, t, r)) ->
           printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-          ([], ctx)
+          reset
         | TyperFailed (TermWithMessage (f, t)) ->
           sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
-          ([], ctx)
+          reset
         | e -> 
           printfn "NATIVE ERROR: %s" e.Message 
-          ([], ctx)
-    repl lines' ctx'
+          reset
+    repl lines' ctx' prompt'
 
 let inline debug () =
 
@@ -191,12 +143,15 @@ end
   
 
 "
+
+  repl [] defaultContext "> "
+  (*
   let (toplevel, ctx) = 
     code |> TopLevelParser.parse |> TopLevelParser.toToplevelAndNewContext defaultContext []
 
   printfn "%s" (TopLevel<_>.print toplevel)
   Console.ReadLine() |> ignore
-
+  *)
 
 
 [<EntryPoint>]
@@ -208,11 +163,11 @@ let main argv =
 #endif
 
   match (argv |> Array.toList) with
-    | "--quiet" :: filename :: _
-    | filename :: _ when File.Exists filename ->
-      let code = File.ReadAllText filename in
-      let ctx = defaultContext in
-      tryRun ctx code (argv.[0] = "--quiet")
+    //| "--quiet" :: filename :: _
+    //| filename :: _ when File.Exists filename ->
+    //  let code = File.ReadAllText filename in
+    //  let ctx = defaultContext in
+    //  tryRun ctx code (argv.[0] = "--quiet")
     | [] -> 
       printfn "nml REPL ver.???";
       printfn "";
@@ -229,7 +184,7 @@ let main argv =
       printfn "         let! y = readNat () in";
       printfn "         print (x + y);;";
       printfn "";
-      loop defaultContext None
+      repl [] defaultContext "> "
     | filename :: _ -> failwith "file doesn't exist"
     | _ -> ()
   0

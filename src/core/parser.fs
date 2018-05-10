@@ -9,6 +9,7 @@ open FSharp.Collections
 open System
 
 exception ParserFailed of string
+exception ParserFailedAtEof
 
 let ws x = x .>> spaces
 let syn x = pstring x |> ws
@@ -522,14 +523,11 @@ module TopLevelParser =
 
   let implicitModule = sepEndBy toplevel spaces
 
-  exception ParserFailedAtEof
-
   let parse text =
     match run (spaces >>. implicitModule .>> spaces .>> eof) text with
       | Success (r, _, _) -> r
       | Failure (msg, err, _) ->
-        use str = new CharStream(text, 0, text.Length) in
-        if err.Position.Index = str.IndexOfLastCharPlus1 then
+        if msg |> String.contains "Note: The error occurred at the end of the input stream." then
           ParserFailedAtEof |> raise
         else
           ParserFailed msg |> raise
