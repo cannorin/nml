@@ -203,8 +203,16 @@ module TermParser =
     | PTmMatch of ParsedTerm * (ParsedTerm * ParsedTerm) list
 
   let toUntypedTerm ctx pt =
+    let rec getVariablePatterns =
+      function
+        | UTmFreeVar [x] when x <> "_" -> [x]
+        | UTmTuple xs 
+        | UTmConstruct (_, xs) 
+        | UTmApply (UTmFreeVar ["::"], xs) -> xs |> List.map getVariablePatterns |> List.concat 
+        | _ -> []
+
     let rec totc stack (pt, bd) =
-      let fv = fvOfTerm (pt |> tot []) |> Set.remove "::" |> Set.toList in
+      let fv = pt |> tot [] |> getVariablePatterns in
       (pt |> tot (List.append fv stack), bd |> tot (List.append fv stack))
     and tot stack = function
       | PTmVar x ->
@@ -400,6 +408,7 @@ module TopLevelParser =
   open TermParser
   open TypeParser
   open System.Runtime.InteropServices.ComTypes
+  open FParsec
 
   type PTTypeKind = PTTKVariant | PTTKInductive
 
@@ -432,20 +441,21 @@ module TopLevelParser =
             let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
             TopDo (ty, tm) +>> toToplevelAndNewContext ctx moduleName remaining
           | PTopTypeDef (kind, name, typrms, cstrs) ->
+            let qualifiedName = moduleName @ [name]
             let ctx' =
               match kind with
                 | PTTKVariant -> ctx
-                | PTTKInductive -> ctx |> Context.addType name (DataTypeSelf(moduleName @ [name], typrms |> List.map TypeVar))
+                | PTTKInductive -> ctx |> Context.addType name (DataTypeSelf(qualifiedName, typrms |> List.map TypeVar))
             let cstrs' =
               cstrs |> List.map (fun (n, pt) -> (n, pt |> Option.map (TypeParser.toKnownType ctx') |> orEmpty))
                     |> List.map (fun (n, ty) ->
                         match ty with
                           | DataType (["*"], ts, [], _) ->
-                            { name = n; args = ts; isRecursive = false }
+                            { name = n; args = ts; isRecursive = ts |> List.exists (containsSelf qualifiedName) }
                           | _ ->
-                            { name = n; args = [ty]; isRecursive = false }
+                            { name = n; args = [ty]; isRecursive = containsSelf qualifiedName ty }
                        )
-            let ty = DataType(moduleName @ [name], typrms |> List.map TypeVar, cstrs', ENull)
+            let ty = DataType(qualifiedName, typrms |> List.map TypeVar, cstrs', ENull)
             TopTypeDef(name, ty) +>> toToplevelAndNewContext (ctx |> Context.addType name ty) moduleName remaining
       | [] -> ([], ctx)
           
@@ -512,7 +522,14 @@ module TopLevelParser =
 
   let implicitModule = sepEndBy toplevel spaces
 
+  exception ParserFailedAtEof
+
   let parse text =
     match run (spaces >>. implicitModule .>> spaces .>> eof) text with
       | Success (r, _, _) -> r
-      | Failure (msg, _, _) -> ParserFailed msg |> raise
+      | Failure (msg, err, _) ->
+        use str = new CharStream(text, 0, text.Length) in
+        if err.Position.Index = str.IndexOfLastCharPlus1 then
+          ParserFailedAtEof |> raise
+        else
+          ParserFailed msg |> raise

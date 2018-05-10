@@ -10,6 +10,9 @@ open Microsoft.FSharp.Collections
 open System
 open System.IO
 open Mono.Terminal
+open System.Text
+open nml.Parser
+open nml.Parser
 
 let editor = new LineEditor ("nml", 300)
 let inline scan prompt = editor.Edit(prompt, "")
@@ -65,34 +68,127 @@ let rec loop ctx inc =
   loop ctx None
 
 
+let rec repl lines ctx =
+  let currentLine = Console.ReadLine() |> String.trim
+  if String.IsNullOrWhiteSpace currentLine then
+    repl lines ctx
+  else
+    let lines = currentLine :: lines
+    let input = lines |> List.rev |> String.concat Environment.NewLine
+    let (lines', ctx') =
+      try
+        let (tls, _) = TopLevelParser.parse input |> TopLevelParser.toToplevelAndNewContext ctx ["repl"]
+        let rec e ctx runDefer t =
+          match (t |> next (ctx |> Context.termMap snd)) with
+            | Halted result -> result
+            | Reducible t ->
+              if runDefer then UTmDefer (e ctx true t) else UTmDefer t
+        let ctx' =
+          let rec evalTop ctx newtls =
+            function
+              | [] -> (ctx, newtls)
+              | ct :: rest ->
+                let inline id2 _ t = t
+                let newtl =
+                  match ct with
+                    | TopLet (name, (ty, tm)) ->
+                      let tm' = e ctx false tm
+                      TopLet (name, (ty, tm'))
+                    | TopDo (ty, tm) ->
+                      let tm' = e ctx true tm
+                      TopDo (ty, tm')
+                    | TopOpen name -> TopOpen name
+                    | TopModule (name, subtops) ->
+                      let subtops' = subtops |> evalTop ctx [] |> snd |> List.rev
+                      TopModule (name, subtops') 
+                    | tydef ->
+                      tydef
+                rest |> evalTop (ctx |> Context.addToplevels [newtl] id2) (newtl :: newtls)
+          evalTop ctx [] tls |> fst
+        ([], ctx')
+      with 
+        | ParserFailedAtEof -> (lines, ctx)
+        | ParserFailed msg ->
+          cprintfn ConsoleColor.Yellow "PARSER FAILED: %s" msg
+          ([], ctx)
+        | TyperFailed (UnifyFailed (a, b, ut)) ->
+          printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
+          ([], ctx)
+        | TyperFailed (UnknownVar (n, _)) ->
+          printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
+          ([], ctx)
+        | TyperFailed (NotMatchable (l, t, r)) ->
+          printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
+          ([], ctx)
+        | TyperFailed (TermWithMessage (f, t)) ->
+          sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
+          ([], ctx)
+        | e -> 
+          printfn "NATIVE ERROR: %s" e.Message 
+          ([], ctx)
+    repl lines' ctx'
+
 let inline debug () =
 
   let code = @"
-variant YesNo a = 
-    Yes of a
-  | No
+let append xs ys =
+  (
+    fixpoint f of
+      | [] -> ys
+      | h :: t -> h :: f t
+  ) xs
+;;
+
+let max x y = if x > y then x else y ;;
+
+inductive Bst a =
+    Node of a * Bst a * Bst a
+  | Leaf
 end
 
-module YesNo = begin
-  let map f =
-    function
-      Yes x -> Yes (f x)
-    | No -> No
+module Bst = begin
+  let insert x = 
+    fixpoint f of
+      Leaf -> Node (x, Leaf, Leaf)
+    | Node (y, left, right) ->
+      if x < y then
+        Node (y, f left, right)
+      else
+        Node (y, left, f right)
   ;;
 
-  let filter p =
-    function
-      Yes x ->
-        if p x then Yes x else No
-    | No -> No
+  let contains x =
+    fixpoint f of
+      Leaf -> false
+    | Node (y, left, right) ->
+      if x < y then f left
+      else if x = y then true
+      else f right
   ;;
+
+  let height =
+    fixpoint f of
+      Leaf -> 0
+    | Node (_, left, right) ->
+      1 + max (f left) (f right)
+  ;;
+
+  let itemsAtDepth depth tree =
+    let f = 
+      fixpoint f of
+        Leaf -> fun _ -> []
+      | Node (a, left, right) ->
+        begin fun d ->
+          if d = depth then
+            [a]
+          else
+            append (f left (d+1)) (f right (d+1))
+        end
+    in f tree 0
+  ;;
+
 end
-
-Yes 42 |> YesNo.map ((+) 1) |> YesNo.filter ((>) 30) ;;
-
-open YesNo;;
-
-let lessThan40 x = x |> filter ((<) 40) ;;
+  
 
 "
   let (toplevel, ctx) = 

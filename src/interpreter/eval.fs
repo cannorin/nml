@@ -141,10 +141,10 @@ let rec e (ctx: Context<UntypedTerm>) stack mode = function
 let eval ctx t =
   t |> e ctx [] Reduce
 
-type NextResult = Reducible of UntypedTerm | Halted
+type NextResult = Reducible of UntypedTerm | Halted of UntypedTerm
 
 let next ctx t =
   match t with
     | UTmDefer x -> Reducible x
-    | _ -> Halted
+    | x -> Halted x
 

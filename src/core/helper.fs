@@ -99,6 +99,16 @@ let rec delayTypeBy i ty =
 let hasTyVar vname t =
   fvOf t |> Set.contains vname
 
+let rec containsSelf sn =
+  function
+    | DataTypeSelf (n, _) when n = sn -> true
+    | Fun (a, b) -> containsSelf sn a || containsSelf sn b
+    | DataType (_, _, cstrs, _) ->
+      cstrs |> List.map (fun x -> x.args |> List.exists (containsSelf sn))
+            |> List.exists id
+    | Deferred t | Scheme (_, t) -> containsSelf sn t
+    | _ -> false
+
 let rec isInductive vt =
   match vt with
     | DataType (vname, vtargs, cts, _) ->

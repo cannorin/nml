@@ -70,33 +70,37 @@ module Context =
     ctx |> List.filter (function | TermContext (n, _) when n = name && not skipped -> skipped <- true; false | _ -> true)
 
   let inline addType name ty ctx =
-    TypeContext (name, ty) :: ctx
+    TypeContext (name, ty) :: ctx   
+   
+  let rec private at tls _targetCtx _ctx evaluator =
+    match tls with
+      | [] -> _targetCtx
+      | toplevel :: remainings ->
+        match toplevel with
+          | TopOpen name ->
+            let _ctx' = openModule name _ctx
+            at remainings _targetCtx _ctx' evaluator
+          | TopTypeDef (name, ty) ->
+            let extend c =
+              TypeContext (name, ty) :: c
+            at remainings (extend _targetCtx) (extend _ctx) evaluator
+          | TopModule (name, subtls) ->
+            let extend c =
+              ModuleContext (name, at subtls [] _ctx evaluator) :: c
+            at remainings (extend _targetCtx) (extend _ctx) evaluator
+          | TopLet (name, tm) ->
+            let extend c =
+              TermContext (name, evaluator _ctx tm) :: c
+            at remainings (extend _targetCtx) (extend _ctx) evaluator
+          | TopDo tm ->
+            evaluator _ctx tm |> ignore
+            at remainings _targetCtx _ctx evaluator
+
+  let fromToplevels ctx evaluator toplevels =
+    at toplevels [] ctx evaluator
 
   let addToplevels toplevels evaluator ctx =
-    let rec at tls _targetCtx _ctx =
-      match tls with
-        | [] -> _targetCtx
-        | toplevel :: remainings ->
-          match toplevel with
-            | TopOpen name ->
-              let _ctx' = openModule name _ctx
-              at remainings _targetCtx _ctx'
-            | TopTypeDef (name, ty) ->
-              let extend c =
-                TypeContext (name, ty) :: c
-              at remainings (extend _targetCtx) (extend _ctx)
-            | TopModule (name, subtls) ->
-              let extend c =
-                ModuleContext (name, at subtls [] _ctx) :: c
-              at remainings (extend _targetCtx) (extend _ctx)
-            | TopLet (name, tm) ->
-              let extend c =
-                TermContext (name, evaluator ctx tm) :: c
-              at remainings (extend _targetCtx) (extend _ctx)
-            | TopDo tm ->
-              evaluator ctx tm |> ignore
-              at remainings _targetCtx _ctx
-    at toplevels ctx ctx
+    at toplevels ctx ctx evaluator
 
   let toTyperMap ctx =
     ctx

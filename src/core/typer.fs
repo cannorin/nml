@@ -139,6 +139,22 @@ let unify cs =
         u ((a, b, d) :: rest)
       | (DataType (lname, lts, _, _), DataType (rname, rts, _, _), t) :: rest when (lname = rname && List.length lts = List.length rts) ->
         rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
+      | (Scheme (svar, sb), Scheme (tvar, tb), _) :: _ & (s, t, x) :: rest when fvOf s = fvOf t ->
+        let fvs = fvOf s
+        let uniqVar =
+          let rec f uniq =
+            let (v, uniq) = genUniq uniq
+            if fvs |> Set.contains v then
+              f uniq
+            else
+              TypeVar v
+          f 0
+        let sb' = svar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| sb 
+        let tb' = tvar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| tb
+        if sb' = tb' then
+          u rest
+        else
+          UnifyFailed (s, t, x) |> TyperFailed |> raise
       | (s, t, u) :: rest ->
         let (s', t') = prettify2 (s, t) in
         UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
