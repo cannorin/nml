@@ -15,18 +15,19 @@ let asgn_Extract = function
 
 let cstr_toAsgn cstr =
   match cstr with
-    | xs -> xs |> List.choose (function | Constraint (TypeVar name, t, _) -> Some (name, t) | _ -> None ) |> Map.ofList |> Assign
+    | xs -> xs |> List.choose (function | Constraint (TyVar name, t, _) -> Some (name, t) | _ -> None ) |> Map.ofList |> Assign
 
 // tx |> substIn "x" t
 // --> t [x <- tx]
 let substIn vname tsbj tvl =
   let rec sub = function
-    | Fun (a, b) -> Fun (sub a, sub b)
-    | TypeVar nm when (nm = vname) -> tvl
-    | Deferred t -> Deferred (sub t)
-    | DataType (n, ts, cts, p) -> DataType (n, ts |> List.map sub, cts |> List.map (argsmap sub), p)
-    | DataTypeSelf (n, ts) -> DataTypeSelf (n, ts |> List.map sub)
-    | Scheme (tvs, t) -> Scheme (tvs, sub t)
+    | TyFun (a, b) -> TyFun (sub a, sub b)
+    | TyVar nm when (nm = vname) -> tvl
+    | TyDeferred t -> TyDeferred (sub t)
+    | TyDataType (n, ts, cts, p, info) ->
+      TyDataType (n, ts |> List.map sub, cts |> List.map (argsmap sub), p, info)
+    | TyDataTypeSelf (n, ts) -> TyDataTypeSelf (n, ts |> List.map sub)
+    | TyScheme (tvs, t) -> TyScheme (tvs, sub t)
     | x -> x
   in sub tsbj
 
@@ -46,17 +47,17 @@ let substAllInConstraints asgn cs =
     |> Map.fold (fun c name t -> c |> substInConstraints name t) cs
 
 let rec removeForall = function
-  | Scheme (_, t) -> removeForall t
+  | TyScheme (_, t) -> removeForall t
   | t -> t
 
 let prettify uniq ts =
   let rec getTyNames = function
-    | TypeVar n -> set [n]
-    | Fun (a, b) -> Set.union (getTyNames a) (getTyNames b)
-    | Deferred t -> getTyNames t
-    | DataType (_, ts, _, _)
-    | DataTypeSelf (_, ts) -> ts |> List.map getTyNames |> List.fold Set.union (set [])
-    | Scheme (vs, t) -> getTyNames t |> Set.union vs
+    | TyVar n -> set [n]
+    | TyFun (a, b) -> Set.union (getTyNames a) (getTyNames b)
+    | TyDeferred t -> getTyNames t
+    | TyDataType (_, ts, _, _, _)
+    | TyDataTypeSelf (_, ts) -> ts |> List.map getTyNames |> List.fold Set.union (set [])
+    | TyScheme (vs, t) -> getTyNames t |> Set.union vs
     | _ -> set []
   in
   let (fvs, ts) =
@@ -64,7 +65,7 @@ let prettify uniq ts =
       let fv = getTyNames t in
       let t =
         if (Set.count fv > 0) then
-          Scheme (fv, t)
+          TyScheme (fv, t)
         else
           t
       in (fv, t)
@@ -74,9 +75,9 @@ let prettify uniq ts =
        |> (fun (x, y) -> (x, List.rev y))
   in
   let rec rename m = function
-    | Scheme (vs, t) ->
-      Scheme (vs |> Set.map (fun x -> m |> Map.tryFind x ?| x), rename m t) 
-    | x -> x |> substAll (m |> Map.map (fun _ v -> TypeVar v) |> Assign)
+    | TyScheme (vs, t) ->
+      TyScheme (vs |> Set.map (fun x -> m |> Map.tryFind x ?| x), rename m t) 
+    | x -> x |> substAll (m |> Map.map (fun _ v -> TyVar v) |> Assign)
   let ftmap = fvs |> Set.map (fun x -> (x, x + "+")) |> Set.toList |> Map.ofList in
   let ts' = ts |> List.map (rename ftmap) in
   let (us, uniq) = fvs |> Set.count |> genUniqs uniq in
@@ -98,7 +99,7 @@ let rename u vs f t =
   let (nvs, u') = vs |> List.length |> genUniqs u in
   let qvs = vs |> List.map ((+) "_rename") in
   let genasgn xs ys =
-    List.map2 (fun x y -> (x, TypeVar y)) xs ys |> Map.ofList |> Assign
+    List.map2 (fun x y -> (x, TyVar y)) xs ys |> Map.ofList |> Assign
   in
   (t |> f (substAll (genasgn vs qvs)) |> f (substAll (genasgn qvs nvs)), u')
 
@@ -122,24 +123,24 @@ let unify cs =
   let rec u cs' = 
     match cs' with
       | (s, t, _) :: rest when (s = t) -> u rest
-      | (s, TypeVar tn, x) :: rest
-      | (TypeVar tn, s, x) :: rest when (s |> hasTyVar tn |> not) ->
-        List.append (cs' |> cstrmap (substInConstraints tn s) |> u) [ (TypeVar tn, s, x) ]
-      | ((DataType (n, lts, lcts, _), DataTypeSelf (m, rts), _) :: _ & (dt, dts, t) :: rest) 
-      | ((DataTypeSelf (m, rts), DataType (n, lts, lcts, _), _) :: _ & (dts, dt, t) :: rest) when (n = m && List.length lts = List.length rts) ->
+      | (s, TyVar tn, x) :: rest
+      | (TyVar tn, s, x) :: rest when (s |> hasTyVar tn |> not) ->
+        List.append (cs' |> cstrmap (substInConstraints tn s) |> u) [ (TyVar tn, s, x) ]
+      | ((TyDataType (n, lts, lcts, _, _), TyDataTypeSelf (m, rts), _) :: _ & (dt, dts, t) :: rest) 
+      | ((TyDataTypeSelf (m, rts), TyDataType (n, lts, lcts, _, _), _) :: _ & (dts, dt, t) :: rest) when (n = m && List.length lts = List.length rts) ->
         match (dt |> isInductive) with
           | Some true -> rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
           | Some false ->
             let (l, r) = prettify2 (dt, dts) in
             UnifyFailed (l, r, t) |> TyperFailed |> raise
           | None -> dt |> prettify1 |> NotInductive |> TyperFailed |> raise
-      | (Fun (a1, b1), Fun (a2, b2), f) :: rest ->
+      | (TyFun (a1, b1), TyFun (a2, b2), f) :: rest ->
         u ((a1, a2, f) :: (b1, b2, f) :: rest)
-      | (Deferred a, Deferred b, d) :: rest ->
+      | (TyDeferred a, TyDeferred b, d) :: rest ->
         u ((a, b, d) :: rest)
-      | (DataType (lname, lts, _, _), DataType (rname, rts, _, _), t) :: rest when (lname = rname && List.length lts = List.length rts) ->
+      | (TyDataType (lname, lts, _, _, _), TyDataType (rname, rts, _, _, _), t) :: rest when (lname = rname && List.length lts = List.length rts) ->
         rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-      | (Scheme (svar, sb), Scheme (tvar, tb), _) :: _ & (s, t, x) :: rest when fvOf s = fvOf t ->
+      | (TyScheme (svar, sb), TyScheme (tvar, tb), _) :: _ & (s, t, x) :: rest when fvOf s = fvOf t ->
         let fvs = fvOf s
         let uniqVar =
           let rec f uniq =
@@ -147,7 +148,7 @@ let unify cs =
             if fvs |> Set.contains v then
               f uniq
             else
-              TypeVar v
+              TyVar v
           f 0
         let sb' = svar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| sb 
         let tb' = tvar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| tb
@@ -174,23 +175,23 @@ let rec recon ctx stack uniq term =
   match term with
     | UTmFreeVar vn ->
       match (ctx |> Context.findTerm vn) with
-        | Some (Scheme (vs, t)) ->
+        | Some (TyScheme (vs, t)) ->
           let (t',uniq) = t |> rename uniq (vs |> Set.toList) id in
           (term, t', uniq, [])
         | Some t -> (term, t, uniq, [])
         | None -> 
           match (ctx |> Context.findConstructor vn None) with
             // constructor as a function
-            | Some (DataType (name, targs, cts, p), ctargs) ->
-              let tprms = targs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
+            | Some (TyDataType (name, targs, cts, p, info), ctargs) ->
+              let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
               let ((targs', cts', ctargs'), uniq) = (targs, cts, ctargs) |> rename uniq tprms (fun f (x, y, z) -> (x |> List.map f, y |> List.map (argsmap f), z |> List.map f)) in
               let (argt, isone) = 
                 if (ctargs' |> List.length = 1) then
                   (ctargs'.[0], true)
                 else
-                  (TTuple ctargs', false)
+                  (TyTuple ctargs', false)
               in
-              let typ = (Fun (argt, DataType (name, targs', cts', p))) in
+              let typ = (TyFun (argt, TyDataType (name, targs', cts', p, info))) in
               let con = ExternalFun (sprint_qualified vn) typ (function
                   | x :: _ when isone -> UTmConstruct (vn, [x])
                   | UTmConstruct (["*"], xs) :: _ -> UTmConstruct (vn, xs)
@@ -209,14 +210,14 @@ let rec recon ctx stack uniq term =
 
     | UTmFun body ->
       let (u, uniq) = genUniq uniq in
-      let (body', t, uniq, cstr) = recon ctx ((TypeVar u) :: stack) uniq body in
+      let (body', t, uniq, cstr) = recon ctx ((TyVar u) :: stack) uniq body in
       let (v, uniq) = genUniq uniq in
-      (UTmFun body', TypeVar v, uniq, cstr @ Constraint (TypeVar v, Fun (TypeVar u, t), UTmFun body') :: [])
+      (UTmFun body', TyVar v, uniq, cstr @ Constraint (TyVar v, TyFun (TyVar u, t), UTmFun body') :: [])
 
     | UTmConstruct (n, args) ->
       match (ctx |> Context.findConstructor n (Some args)) with
-        | Some (DataType (name, vtargs, cts, p), _) ->
-          let vtprms = vtargs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
+        | Some (TyDataType (name, vtargs, cts, p, info), _) ->
+          let vtprms = vtargs |> List.choose (function | TyVar x -> Some x | _ -> None) in
           let ((vtargs', cts'), uniq) = (vtargs, cts) |> rename uniq vtprms (fun f (x, y) -> (x |> List.map f, y |> List.map (argsmap f))) in
           let ctargs =
             (cts' |> List.find (fun c -> c.name = List.last n)).args
@@ -228,7 +229,7 @@ let rec recon ctx stack uniq term =
               |> List.map2 (fun x (y, z) -> Constraint (y, z, x)) args'
           in
           let (u, uniq) = genUniq uniq in
-          (UTmConstruct (n, args'), TypeVar u, uniq, vcstrs @ cstrs @ Constraint (TypeVar u, DataType (name, vtargs', cts', p), UTmConstruct (n, args')) :: [])
+          (UTmConstruct (n, args'), TyVar u, uniq, vcstrs @ cstrs @ Constraint (TyVar u, TyDataType (name, vtargs', cts', p, info), UTmConstruct (n, args')) :: [])
         | _
         | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
     
@@ -237,19 +238,19 @@ let rec recon ctx stack uniq term =
     
     | UTmTuple xs ->
       let (xs', txs, uniq, cstrs) = multiRecon uniq xs in
-      (UTmTuple xs', TTuple txs, uniq, cstrs) 
+      (UTmTuple xs', TyTuple txs, uniq, cstrs) 
 
     | UTmApply (l, rs) ->
       let (l', tl, uniq, cstr1) = recon ctx stack uniq l in
       let (rs', trs, uniq, cstr2) = multiRecon uniq rs in
       let (nv, uniq) = genUniq uniq in
-      (UTmApply (l', rs'), TypeVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun Fun trs (TypeVar nv), UTmApply (l', rs')) :: [])
+      (UTmApply (l', rs'), TyVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun TyFun trs (TyVar nv), UTmApply (l', rs')) :: [])
 
     | UTmLiteral l -> 
       match l with
-        | LNat _ -> (term, Nat, uniq, [])
-        | LBool _ -> (term, Bool, uniq, [])
-        | LUnit -> (term, Unit, uniq, [])
+        | LNat _ -> (term, TyNat, uniq, [])
+        | LBool _ -> (term, TyBool, uniq, [])
+        | LUnit -> (term, TyUnit, uniq, [])
    
     | UTmLet (x, value, body) ->
       let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value in
@@ -265,39 +266,39 @@ let rec recon ctx stack uniq term =
                 |> Set.toList
                 |> List.filter (fun y -> fvs |> List.contains y |> not)
       in
-      let tx = if (List.length tvars > 0) then Scheme (tvars |> Set.ofList, tvalue') else tvalue' in
+      let tx = if (List.length tvars > 0) then TyScheme (tvars |> Set.ofList, tvalue') else tvalue' in
       let ctx' = ctx |> Context.addTerm x tx in
       let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body in
 
       let tbody' = tbody |> substAll (cstr1 @ cstr2 |> unify |> cstr_toAsgn) in
 
       let (r, uniq) = genUniq uniq in
-      (UTmLet (x, value', body'), TypeVar r, uniq, cstr1 @ cstr2 @ Constraint (TypeVar r, tbody, UTmLet (x, value', body')) :: [])
+      (UTmLet (x, value', body'), TyVar r, uniq, cstr1 @ cstr2 @ Constraint (TyVar r, tbody, UTmLet (x, value', body')) :: [])
    
     | UTmLetDefer (x, value, body) ->
       let (nv, uniq) = genUniq uniq in
       let (value', tvalue, uniq, cstr) = recon ctx stack uniq value in
       let (mv, uniq) = genUniq uniq in
-      let cstr' = cstr @ Constraint (Deferred (TypeVar nv), tvalue, value') :: Constraint (TypeVar mv, Deferred (TypeVar nv), value') :: [] in
+      let cstr' = cstr @ Constraint (TyDeferred (TyVar nv), tvalue, value') :: Constraint (TyVar mv, TyDeferred (TyVar nv), value') :: [] in
       let (lv, uniq) = genUniq uniq in
-      let (body', tbody, uniq, cstr2) = recon (ctx |> Context.addTerm x (TypeVar lv)) stack uniq body in
+      let (body', tbody, uniq, cstr2) = recon (ctx |> Context.addTerm x (TyVar lv)) stack uniq body in
       let cstr2' = cstr2 @ cstr' in
-      let (tvalue', timevalue) = (TypeVar mv) |> substAll (cstr2' |> unify |> cstr_toAsgn) |> getTimeOfType  in
+      let (tvalue', timevalue) = (TyVar mv) |> substAll (cstr2' |> unify |> cstr_toAsgn) |> getTimeOfType  in
       UTmLet (x, value' |> times timevalue UTmRun, body) |> times timevalue UTmDefer |> recon ctx stack uniq
 
     | UTmDefer x ->
       let (nv, uniq) = genUniq uniq in
-      let dt = Deferred (TypeVar nv) in
+      let dt = TyDeferred (TyVar nv) in
       let (x', tx, uniq, cstr) = recon ctx stack uniq x in
       let (mv, uniq) = genUniq uniq in
-      (UTmDefer x', TypeVar mv, uniq, cstr @ Constraint (TypeVar nv, tx, UTmDefer x') :: Constraint (TypeVar mv, dt, UTmDefer x') :: [])
+      (UTmDefer x', TyVar mv, uniq, cstr @ Constraint (TyVar nv, tx, UTmDefer x') :: Constraint (TyVar mv, dt, UTmDefer x') :: [])
     
     | UTmRun x ->
       let (nv, uniq) = genUniq uniq in
-      let dt = Deferred (TypeVar nv) in
+      let dt = TyDeferred (TyVar nv) in
       let (x', tx, uniq, cstr) = x |> recon ctx stack uniq in
       let (mv, uniq) = genUniq uniq in
-      (UTmRun x', TypeVar mv, uniq, cstr @ Constraint (dt, tx, UTmRun x) :: Constraint (TypeVar mv, TypeVar nv, UTmRun x') :: [])
+      (UTmRun x', TyVar mv, uniq, cstr @ Constraint (dt, tx, UTmRun x) :: Constraint (TyVar mv, TyVar nv, UTmRun x') :: [])
 
     | UTmExternal (_, t) ->
       (term, t, uniq, [])
@@ -334,7 +335,7 @@ let rec recon ctx stack uniq term =
       in
       let term' = UTmMatch (v', cases |> List.map2 (fun nb (pat, b) -> (pat, nb)) bs') in
       let (b, uniq) = genUniq uniq in
-      let b = TypeVar b in
+      let b = TyVar b in
       let bcstr =
         tbs |> List.map2 (fun x t -> Constraint (b, t, x)) bs'
       in
@@ -345,10 +346,10 @@ let rec recon ctx stack uniq term =
       let (uvs, uniq) = genUniqs uniq 3 in
       let (targ, targ', tret) =
         match uvs with
-          | [a; b; c] -> (TypeVar a, TypeVar b, TypeVar c)
+          | [a; b; c] -> (TyVar a, TyVar b, TyVar c)
           | _ -> failwith "impossible_UFixMatch"
       in
-      let tthis = Fun (targ, tret) in
+      let tthis = TyFun (targ, tret) in
 
       let ctx' = ctx |> Context.addTerm "x" targ' in
       let (mth, tmth, uniq, cstr1) = recon ctx' (tthis :: stack) uniq (UTmMatch (UTmFreeVar ["x"], cases)) in
@@ -357,7 +358,7 @@ let rec recon ctx stack uniq term =
       match mth with
         | UTmMatch (_, cases) ->
           verifyTermination cases |> ignore;
-          (UTmFixMatch cases, TypeVar ret, uniq, cstr1 @ Constraint (tthis, Fun (targ', tmth), UTmFixMatch cases) :: Constraint (TypeVar ret, Fun (targ', tmth), UTmFixMatch cases) :: [])
+          (UTmFixMatch cases, TyVar ret, uniq, cstr1 @ Constraint (tthis, TyFun (targ', tmth), UTmFixMatch cases) :: Constraint (TyVar ret, TyFun (targ', tmth), UTmFixMatch cases) :: [])
         | _ ->
           failwith "impossible_UFixMatch"
 
@@ -414,8 +415,8 @@ and reconFromPatterns mth ctx uniq =
       | UTmConstruct (x, ys) ->
         let (name, targs, cts, ctargs, nq) =
           match (ctx |> Context.findConstructor x (Some ys)) with
-            | Some (DataType (name, targs, cts, _), ctargs) ->
-              let tprms = targs |> List.choose (function | TypeVar x -> Some x | _ -> None) in
+            | Some (TyDataType (name, targs, cts, _, _), ctargs) ->
+              let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
               let ((targs', cts', ctargs'), uniq) = 
                 (targs, cts, ctargs) |> rename uq tprms (fun f (x, y, z) -> 
                     (
@@ -432,28 +433,28 @@ and reconFromPatterns mth ctx uniq =
         let (fnq, pts) = ys |> List.fold (fun (u, ts) y -> let (nu, nt) = gh u y in (nu, nt :: ts)) (nq, []) in
         let asgn = 
           ctargs |> List.rev
-                 |> List.map2 (fun y -> (function | TypeVar x -> Some (x, y) | _ -> None)) pts 
+                 |> List.map2 (fun y -> (function | TyVar x -> Some (x, y) | _ -> None)) pts 
                  |> List.choose id |> Map.ofList |> Assign 
         in
         let vt = Variant (name, targs, cts) |> substAll asgn in
         (fnq, vt)
       | UTmTuple xs ->
         let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
-        (nq, TTuple (ts |> List.rev))
-      | UTmLiteral LUnit -> (uq, Unit)
-      | UTmLiteral (LNat _) -> (uq, Nat)
-      | UTmLiteral (LBool _) -> (uq, Bool)
+        (nq, TyTuple (ts |> List.rev))
+      | UTmLiteral LUnit -> (uq, TyUnit)
+      | UTmLiteral (LNat _) -> (uq, TyNat)
+      | UTmLiteral (LBool _) -> (uq, TyBool)
       | UTmFreeVar ["_"]
       | UTmBoundVar _ ->
         let (tn, nq) = genUniq uq in
-        (nq, TypeVar tn)
+        (nq, TyVar tn)
       | _ -> TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
   in
   let (uniq, ts) = pats |> List.map fst |> List.fold (fun (u, ts) p -> let (nu, t) = gh u p in (nu, t :: ts)) (uniq, []) in
   let cstr =
-    ts |> List.map (fun t -> Constraint (TypeVar a, t, mth))
+    ts |> List.map (fun t -> Constraint (TyVar a, t, mth))
   in 
-  let rt = TypeVar a |> substAll (unify cstr |> cstr_toAsgn) in
+  let rt = TyVar a |> substAll (unify cstr |> cstr_toAsgn) in
   exhaustiveCheck (pats |> List.map fst) rt ctx;
   (rt, uniq)
 
@@ -470,22 +471,22 @@ and isValidAsPattern = function
 and bindPattern pat t ctx =
   let rec bt pat t =
     match (pat, t) with
-      | (UTmConstruct (n, xs), DataTypeSelf (name, ts)) ->
+      | (UTmConstruct (n, xs), TyDataTypeSelf (name, ts)) ->
         match (ctx |> Context.findType name) with
-          | Some (DataType (name, vts, cts, p)) ->
-            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
+          | Some (TyDataType (name, vts, cts, p, info)) ->
+            let asgn = vts |> List.map2 (fun x -> function | TyVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
-            bt (UTmConstruct (n, xs)) (DataType (name, ts, cts', p))
+            bt (UTmConstruct (n, xs)) (TyDataType (name, ts, cts', p, info))
           | _ -> failwith "impossible_bindPattern"
-      | (UTmConstruct (n, xs), DataType (_, _, cts, _)) when (cts |> List.exists (fun c -> c.name = List.last n && List.length xs = List.length (c.args))) ->
+      | (UTmConstruct (n, xs), TyDataType (_, _, cts, _, _)) when (cts |> List.exists (fun c -> c.name = List.last n && List.length xs = List.length (c.args))) ->
         let ts = (cts |> List.find (fun c -> c.name = List.last n)).args in
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UTmTuple xs, DataType(["*"], ts, _, _)) when (List.length xs = List.length ts) ->
+      | (UTmTuple xs, TyDataType(["*"], ts, _, _, _)) when (List.length xs = List.length ts) ->
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
       | (UTmFreeVar ["_"], _)
-      | (UTmLiteral LUnit, Unit)
-      | (UTmLiteral (LNat _), DataType (["Nat"], _, _, _))
-      | (UTmLiteral (LBool _), Bool) -> []
+      | (UTmLiteral LUnit, TyUnit)
+      | (UTmLiteral (LNat _), TyDataType (["Nat"], _, _, _, _))
+      | (UTmLiteral (LBool _), TyBool) -> []
       | (UTmBoundVar x, t) -> [ (x, t) ]
       | _ -> failwith "bindfailed"
   in
@@ -507,7 +508,7 @@ and getInductionDepth ptns ctx =
   let rec gett = function
     | UTmConstruct (x, ys) ->
       match (ctx |> Context.findConstructor x (Some ys)) with
-        | Some (DataType (name, _, _, _), _) -> (name, 1) <+> (ys |> List.map gett |> concat)
+        | Some (TyDataType (name, _, _, _, _), _) -> (name, 1) <+> (ys |> List.map gett |> concat)
         | _ -> Map.empty
     | UTmFreeVar ["_"]
     | UTmBoundVar _ -> Map.empty
@@ -535,9 +536,9 @@ and exhaustiveCheck ptns t ctx =
       | None -> mp
   in
   let rec genReq mp = function
-    | DataType (["*"], ts, _, _) ->
+    | TyDataType (["*"], ts, _, _, _) ->
       ts |> List.map (genReq mp) |> cartProd |> List.map UTmTuple
-    | DataType (vname, _, cts, _) ->
+    | TyDataType (vname, _, cts, _, _) ->
       let ns = namespaceof vname
       cts |> List.map (fun c ->
               c.args |> List.map (genReq (mp |> next vname))
@@ -548,19 +549,19 @@ and exhaustiveCheck ptns t ctx =
                         )
              ) 
           |> List.concat
-    | Unit -> [ UTmLiteral LUnit ]
-    | Bool -> [ UTmLiteral (LBool true); UTmLiteral (LBool false)]
-    | DataTypeSelf (name, ts) ->
+    | TyUnit -> [ UTmLiteral LUnit ]
+    | TyBool -> [ UTmLiteral (LBool true); UTmLiteral (LBool false)]
+    | TyDataTypeSelf (name, ts) ->
       match (ctx |> Context.findType name) with
-        | Some (DataType (name, vts, cts, _)) ->
+        | Some (TyDataType (name, vts, cts, p, info)) ->
           if (mp |> Map.containsKey name) then
-            let asgn = vts |> List.map2 (fun x -> function | TypeVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
+            let asgn = vts |> List.map2 (fun x -> function | TyVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
-            genReq mp (DataType (name, vts, cts', ENull))
+            genReq mp (TyDataType (name, vts, cts', p, info))
           else
             [ UTmFreeVar ["_"] ]
         | _ -> failwith "impossible_exhaustivenessCheck"
-    | TypeVar _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
+    | TyVar _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
     | _ -> []
   in
   let possiblePatterns = genReq dmp t in

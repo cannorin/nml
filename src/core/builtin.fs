@@ -21,30 +21,30 @@ let DefInductiveVariant name f =
   TypeContext (name, InductiveVariant ([name], [], f))
 
 let DefPolyVariant name targs ts =
-  TypeContext (name, Variant ([name], targs |> List.map TypeVar, ts))
+  TypeContext (name, Variant ([name], targs |> List.map TyVar, ts))
 
 let DefPolyInductiveVariant name targs f =
-  TypeContext (name, InductiveVariant ([name], targs |> List.map TypeVar, f))
+  TypeContext (name, InductiveVariant ([name], targs |> List.map TyVar, f))
 
 let builtinTypes = [
-  DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TypeVar "a"]); NewConst ("None", []) ];
-  DefPolyVariant "Either" ["a"; "b"] [ NewConst ("Left", [TypeVar "a"]); NewConst ("Right", [TypeVar "b"]) ];
+  DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TyVar "a"]); NewConst ("None", []) ];
+  DefPolyVariant "Either" ["a"; "b"] [ NewConst ("Left", [TyVar "a"]); NewConst ("Right", [TyVar "b"]) ];
   DefInductiveVariant "Nat" (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]);
-  DefPolyInductiveVariant "List" ["a"] (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [TypeVar "a"; self]) ])
+  DefPolyInductiveVariant "List" ["a"] (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [TyVar "a"; self]) ])
 ]
 
 let impossible = UTmLiteral LUnit
 
 let DefFun name targs tret f =
   let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (foldFun Fun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = foldFun Fun targs tret in
+  let e xs = UTmApply (ExternalFun name (foldFun TyFun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
+  let t = foldFun TyFun targs tret in
   TermContext (name, (t, ExternalFun name t e))
 
 let DefPolyFun name tas targs tret f =
   let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (Scheme (set tas, foldFun Fun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = Scheme (set tas, foldFun Fun targs tret) in
+  let e xs = UTmApply (ExternalFun name (TyScheme (set tas, foldFun TyFun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
+  let t = TyScheme (set tas, foldFun TyFun targs tret) in
   TermContext (name, (t, ExternalFun name t e))
 
 let DefRawTerm name term =
@@ -52,7 +52,7 @@ let DefRawTerm name term =
     let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) term in
     let fv = fvOf tt in
     if (Set.count fv > 0) then
-      TermContext (name, (Scheme (fv, tt), t'))
+      TermContext (name, (TyScheme (fv, tt), t'))
     else
       TermContext (name, (tt, t'))
   with
@@ -61,11 +61,11 @@ let DefRawTerm name term =
 
 let DefRawCode name s =
   try
-    let t = TermParser.parse s |> TermParser.toUntypedTerm builtinTypes in
+    let t = NmlParser.parseTerm s |> ParserUtils.toUntypedTerm builtinTypes in
     let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) t in
     let fv = fvOf tt in
     if (Set.count fv > 0) then
-      TermContext (name, (Scheme (fv, tt), t'))
+      TermContext (name, (TyScheme (fv, tt), t'))
     else
       TermContext (name, (tt, t'))
   with
@@ -77,31 +77,31 @@ let addTerm name term ctx =
   let (t', tt) = inferWithContext (ctx |> Context.termMap fst) term in
   let fv = fvOf tt in
   if (Set.count fv > 0) then
-    TermContext (name, (Scheme (fv, tt), t')) :: ctx
+    TermContext (name, (TyScheme (fv, tt), t')) :: ctx
   else
     TermContext (name, (tt, t')) :: ctx
 
 let builtinTerms = [
   DefRawCode "id" "fun x -> x";
   DefRawTerm "run_" (UTmFun (UTmRun (UTmBoundVar 0)));
-  DefFun "exit" [Nat] (Deferred Unit) (function
+  DefFun "exit" [TyNat] (TyDeferred TyUnit) (function
     | UTmLiteral (LNat x) :: _ -> Environment.Exit(int32 x); UTmLiteral LUnit
     | _ -> impossible
   );
-  DefFun "+" [Nat; Nat] Nat (function
+  DefFun "+" [TyNat; TyNat] TyNat (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a + b) |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "*" [Nat; Nat] Nat (function
+  DefFun "*" [TyNat; TyNat] TyNat (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a * b) |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "%" [Nat; Nat] Nat (function
+  DefFun "%" [TyNat; TyNat] TyNat (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a % b) |> UTmLiteral
     | _ -> impossible
   );
   DefRawCode "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
-  DefFun "-?" [Nat; Nat] (TOption Nat) (function
+  DefFun "-?" [TyNat; TyNat] (TyOption TyNat) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
       if (a > b) then
         UTmConstruct (["Some"], [LNat (a - b) |> UTmLiteral])
@@ -109,47 +109,47 @@ let builtinTerms = [
         UTmConstruct (["None"], [])
     | _ -> impossible
   );
-  DefPolyFun "=" ["a"] [TypeVar "a"; TypeVar "a"] Bool (function
+  DefPolyFun "=" ["a"] [TyVar "a"; TyVar "a"] TyBool (function
     | a :: b :: _ -> (a = b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefPolyFun "<>" ["a"] [TypeVar "a"; TypeVar "a"] Bool (function
+  DefPolyFun "<>" ["a"] [TyVar "a"; TyVar "a"] TyBool (function
     | a :: b :: _ -> (a <> b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "not" [Bool] Bool (function
+  DefFun "not" [TyBool] TyBool (function
     | UTmLiteral (LBool b) :: _ -> not b |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun ">" [Nat; Nat] Bool (function
+  DefFun ">" [TyNat; TyNat] TyBool (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a > b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "<" [Nat; Nat] Bool (function
+  DefFun "<" [TyNat; TyNat] TyBool (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a < b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "&&" [Bool; Bool] Bool (function
+  DefFun "&&" [TyBool; TyBool] TyBool (function
     | UTmLiteral (LBool a) :: UTmLiteral (LBool b) :: _ -> (a && b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefFun "||" [Bool; Bool] Bool (function
+  DefFun "||" [TyBool; TyBool] TyBool (function
     | UTmLiteral (LBool a) :: UTmLiteral (LBool b) :: _ -> (a || b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
   DefRawCode "ignore" "fun _ -> ()";
-  DefFun "readNat" [Unit] (Deferred Nat) (fun _ ->
+  DefFun "readNat" [TyUnit] (TyDeferred TyNat) (fun _ ->
       printf "readNat> ";
       Console.ReadLine()
         |> uint32
         |> LNat |> UTmLiteral
   );
-  DefPolyFun "print" ["a"] [TypeVar "a"] (Deferred Unit) (function
+  DefPolyFun "print" ["a"] [TyVar "a"] (TyDeferred TyUnit) (function
     | x :: _ ->
       printfn "print> %s" (to_s x); UTmLiteral LUnit
     | _ -> printfn "print> ???"; impossible
   );
-  DefFun "pause" [Unit] (Deferred Unit) (function
+  DefFun "pause" [TyUnit] (TyDeferred TyUnit) (function
     | _ ->
       printf "pause> press enter to continue ..";
       Console.ReadLine () |> ignore;
@@ -174,7 +174,7 @@ let builtinTerms = [
 let testModule =
   ModuleContext("Test",
     [
-      TermContext("number", (Nat, UTmLiteral (LNat 42u)))
+      TermContext("number", (TyNat, UTmLiteral (LNat 42u)))
       DefRawCode "succ2" "fun a -> Succ (Succ a)"
     ]
   )

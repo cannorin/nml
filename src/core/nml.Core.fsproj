@@ -12,6 +12,7 @@
     <Compile Include="helper.fs" />
     <Compile Include="context.fs" />
     <Compile Include="typer.fs" />
+    <Compile Include="parsedAst.fs" />
     <Compile Include="parser.fs" />
     <Compile Include="builtin.fs" />
   </ItemGroup>

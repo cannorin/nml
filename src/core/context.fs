@@ -50,24 +50,36 @@ module Context =
     let aLen = args |> Option.map List.length
     tryFindRec (fun name ->
                   function
-                    | TypeContext (tyname, DataType (vs, targs, ts, p)) ->
+                    | TypeContext (tyname, TyDataType (vs, targs, ts, p, info)) ->
                       ts |> List.tryFind (fun c -> c.name = name && aLen |> Option.map ((=) (List.length c.args)) ?| true)
-                         |> Option.map (fun c -> (DataType (vs, targs, ts, p), c.args))
+                         |> Option.map (fun c -> (TyDataType (vs, targs, ts, p, info), c.args))
                     | _ -> None
 
                ) qualifiedName ctx
 
-  let inline findModule qualifiedName ctx =
-    tryFindRec (fun name -> function | ModuleContext (nm, ctx') when nm = name -> Some ctx' | _ -> None) qualifiedName ctx |> Option.defaultValue []
+  let inline findModuleItems qualifiedName ctx =
+    let ctx' =
+      let rec f ct =
+        function
+          | [] -> []
+          | name :: remaining ->
+            let cts' =
+              ct |> List.choose (function | ModuleContext (n, ctx') when n = name -> Some ctx' | _ -> None)
+            if List.length remaining = 0 then
+              List.concat cts'
+            else
+              cts' |> List.map (fun ct' -> f ct' remaining)
+                   |> List.concat
+      f ctx qualifiedName
+    ctx'
 
   let inline openModule qualifiedName ctx =
-    findModule qualifiedName ctx @ ctx
+    findModuleItems qualifiedName ctx @ ctx
 
   let inline addTerm name tm ctx = TermContext (name, tm) :: ctx
 
   let inline removeTerm name ctx =
-    let mutable skipped = false
-    ctx |> List.filter (function | TermContext (n, _) when n = name && not skipped -> skipped <- true; false | _ -> true)
+    ctx |> List.filter (function | TermContext (n, _) when n = name -> false | _ -> true)
 
   let inline addType name ty ctx =
     TypeContext (name, ty) :: ctx   
@@ -77,22 +89,22 @@ module Context =
       | [] -> _targetCtx
       | toplevel :: remainings ->
         match toplevel with
-          | TopOpen name ->
-            let _ctx' = openModule name _ctx
-            at remainings _targetCtx _ctx' evaluator
-          | TopTypeDef (name, ty) ->
+          | TopOpen (name, _) ->
+            let c = findModuleItems name _ctx
+            at remainings (c @ _targetCtx) (c @ _ctx) evaluator
+          | TopTypeDef (name, ty, _) ->
             let extend c =
               TypeContext (name, ty) :: c
             at remainings (extend _targetCtx) (extend _ctx) evaluator
-          | TopModule (name, subtls) ->
+          | TopModule (name, subtls, _) ->
             let extend c =
               ModuleContext (name, at subtls [] _ctx evaluator) :: c
             at remainings (extend _targetCtx) (extend _ctx) evaluator
-          | TopLet (name, tm) ->
+          | TopTermDef (name, tm, _) ->
             let extend c =
               TermContext (name, evaluator _ctx tm) :: c
             at remainings (extend _targetCtx) (extend _ctx) evaluator
-          | TopDo tm ->
+          | TopDo (tm, _) ->
             evaluator _ctx tm |> ignore
             at remainings _targetCtx _ctx evaluator
 
