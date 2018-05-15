@@ -7,9 +7,16 @@ type qualified_name = string list
 [<Struct>]
 type source_info = 
   {
+    fileName: string
     startPos: FParsec.Position
     endPos:   FParsec.Position
   }
+  with
+    override this.ToString() =
+      sprintf "%s, Ln %i/Col %i"
+              this.fileName
+              this.startPos.Line
+              this.startPos.Column
 
 // Some: user defined / None: builtin
 type source = source_info option

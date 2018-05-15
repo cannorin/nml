@@ -44,9 +44,17 @@ module private ParsecUtils =
   let name = identifier
   let qualified_name = sepBy1 name (pstring ".")
 
+  let rawStream : Parser<CharStream<unit>, unit> =
+    fun stream -> Reply(stream)
+
   let inline getInfo x =
-    getPosition .>>. x .>>. getPosition
-      |>> fun ((startpos, x), endpos) -> (x, {startPos=startpos; endPos=endpos})
+    rawStream .>>. getPosition .>>. x .>>. getPosition
+      |>> fun (((rst, startpos), x), endpos) ->
+        (x, {
+            fileName=rst.Name;
+            startPos=startpos;
+            endPos=endpos
+          })
 
   let inline prepareOpp op_chars op_reserved op2Handler =
     let opp = new OperatorPrecedenceParser<'t, string, unit>()
@@ -158,7 +166,12 @@ let _ =
       op_reserved
       (fun prefix remOpChars expr1 expr2 ->
         let newInfo =
-          Option.map2 (fun x y -> { startPos = x.startPos; endPos = x.endPos }) expr1.info expr2.info
+          Option.map2 (fun x y ->
+            {
+              fileName = x.fileName;
+              startPos = x.startPos;
+              endPos = y.endPos
+            }) expr1.info expr2.info
         { item = PTmOp2 (expr1, prefix + remOpChars, expr2); info = newInfo } )
  
   // the operator definitions:
@@ -343,12 +356,19 @@ let implicitModule =
   
   many toplevel
 
-let inline private parse parser text =
-  match run (spaces >>. parser .>> spaces .>> eof) text with
+let inline private runStringWithFileName fileName parser text =
+  runParserOnString parser () fileName text
+
+let inline private parse parser text fileName =
+  match runStringWithFileName fileName (spaces >>. parser .>> spaces .>> eof) text with
       | Success (r, _, _) -> r
       | Failure (msg, err, _) ->
           ParserFailed msg |> raise
 
-let inline parseTerm text = parse term text
-let inline parseType text = parse ty text
-let inline parseToplevel text = parse implicitModule text
+let inline parseTerm text = parse term text ""
+let inline parseType text = parse ty text ""
+let inline parseToplevel text = parse implicitModule text ""
+
+let inline parseTermWithFileName fn text = parse term text fn
+let inline parseTypeWithFileName fn text = parse ty text fn
+let inline parseToplevelWithFileName fn text = parse implicitModule text fn

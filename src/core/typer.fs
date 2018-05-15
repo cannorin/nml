@@ -106,6 +106,7 @@ let rename u vs f t =
 
 type FailureReason =
   | UnifyFailed of Type * Type * UntypedTerm
+  | UnifyFailedWithMessage of string * Type * Type * UntypedTerm
   | UnknownVar of qualified_name * Context<Type>
   | UnknownConst of qualified_name * UntypedTerm list * Context<Type>
   | NotMatchable of UntypedTerm * Type * UntypedTerm
@@ -138,7 +139,8 @@ let unify cs =
         u ((a1, a2, f) :: (b1, b2, f) :: rest)
       | (TyDeferred a, TyDeferred b, d) :: rest ->
         u ((a, b, d) :: rest)
-      | (TyDataType (lname, lts, _, _, _), TyDataType (rname, rts, _, _, _), t) :: rest when (lname = rname && List.length lts = List.length rts) ->
+      | (TyDataType (lname, lts, _, _, lloc), TyDataType (rname, rts, _, _, rloc), t) :: rest
+        when (lname = rname && List.length lts = List.length rts && lloc = rloc) ->
         rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
       | (TyScheme (svar, sb), TyScheme (tvar, tb), _) :: _ & (s, t, x) :: rest when fvOf s = fvOf t ->
         let fvs = fvOf s
@@ -156,6 +158,12 @@ let unify cs =
           u rest
         else
           UnifyFailed (s, t, x) |> TyperFailed |> raise
+      | (s, t, u) :: _ & (TyDataType (_, _, _, _, lloc), TyDataType (_, _, _, _, rloc), _) :: _ 
+        when lloc.IsSome && rloc.IsSome ->
+        let (s', t') = prettify2 (s, t) in
+        let msg =
+          sprintf "from different locations: '%s' and '%s'" (to_s lloc.Value) (to_s rloc.Value)
+        UnifyFailedWithMessage (msg, removeForall s', removeForall t', u) |> TyperFailed |> raise
       | (s, t, u) :: rest ->
         let (s', t') = prettify2 (s, t) in
         UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
@@ -413,9 +421,9 @@ and reconFromPatterns mth ctx uniq =
   let rec gh uq pat =
     match pat with
       | UTmConstruct (x, ys) ->
-        let (name, targs, cts, ctargs, nq) =
+        let (name, targs, cts, ctargs, nq, info) =
           match (ctx |> Context.findConstructor x (Some ys)) with
-            | Some (TyDataType (name, targs, cts, _, _), ctargs) ->
+            | Some (TyDataType (name, targs, cts, _, info), ctargs) ->
               let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
               let ((targs', cts', ctargs'), uniq) = 
                 (targs, cts, ctargs) |> rename uq tprms (fun f (x, y, z) -> 
@@ -426,7 +434,7 @@ and reconFromPatterns mth ctx uniq =
                     )
                   )
               in
-              (name, targs', cts', ctargs', uniq)
+              (name, targs', cts', ctargs', uniq, info)
             | _
             | None -> UnknownVar (x, ctx) |> TyperFailed |> raise
         in
@@ -436,7 +444,7 @@ and reconFromPatterns mth ctx uniq =
                  |> List.map2 (fun y -> (function | TyVar x -> Some (x, y) | _ -> None)) pts 
                  |> List.choose id |> Map.ofList |> Assign 
         in
-        let vt = Variant (name, targs, cts) |> substAll asgn in
+        let vt = TyDataType (name, targs, cts, ENull, info) |> substAll asgn in
         (fnq, vt)
       | UTmTuple xs ->
         let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
@@ -594,8 +602,9 @@ let infer term =
 
 let printTypeError = function
   | UnifyFailed (a, b, ut) ->
-    //printfn "%A" b;
     printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
+  | UnifyFailedWithMessage (msg, a, b, ut) ->
+    printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n              %s\n------------> %s" (to_s a) (to_s b) msg (to_s ut)
   | UnknownVar (n, ctx) ->
     printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
   | UnknownConst (n, ts, ctx) ->

@@ -14,9 +14,9 @@ let editor = new LineEditor ("nml", 300)
 editor.TabAtStartCompletes <- false
 let inline scan prompt = editor.Edit(prompt, "")
 
-let tryRun ctx input =
+let tryRun ctx fn input =
   try
-    let (tls, _) = NmlParser.parseToplevel input |> ParserUtils.toToplevelAndNewContext ctx ["repl"]
+    let (tls, _) = NmlParser.parseToplevelWithFileName fn input |> ParserUtils.toToplevelAndNewContext ctx ["repl"]
     let rec e ctx runDefer t =
       match (t |> next (ctx |> Context.termMap snd)) with
         | Halted result -> result
@@ -58,36 +58,27 @@ let tryRun ctx input =
     | ParserFailed msg ->
       printfn "PARSER FAILED: %s" msg
       ctx
-    | TyperFailed (UnifyFailed (a, b, ut)) ->
-      printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-      ctx
-    | TyperFailed (UnknownVar (n, _)) ->
-      printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
-      ctx
-    | TyperFailed (NotMatchable (l, t, r)) ->
-      printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-      ctx
-    | TyperFailed (TermWithMessage (f, t)) ->
-      sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
+    | TyperFailed e ->
+      Typer.printTypeError e
       ctx
     | e -> 
       printfn "NATIVE ERROR: %s" e.Message 
       ctx
 
-let rec repl lines ctx prompt =
+let rec repl ctx prompt count lines =
   let currentLine = scan prompt |> String.trim
   if String.IsNullOrWhiteSpace currentLine then
-    repl lines ctx prompt
+    repl ctx prompt count lines
   else if currentLine |> String.contains ";;" |> not then
-    repl (currentLine :: lines) ctx "- "
+    repl ctx "- " count (currentLine :: lines)
   else
     let currentLine =
       currentLine |> String.splitBy ";;" |> String.removeEmptyEntries |> Array.tryHead ?| ""
     let lines = currentLine :: lines
     let input = lines |> List.rev |> String.concat Environment.NewLine
-    let ctx' = input |> tryRun ctx
+    let ctx' = input |> tryRun ctx (sprintf "repl#%i" count)
     printfn ""
-    repl [] ctx' "> "
+    repl ctx' "> " (count + 1) []
 
 [<EntryPoint>]
 let main argv =
@@ -95,24 +86,13 @@ let main argv =
     | "--quiet" :: filename :: _
     | filename :: _ when File.Exists filename ->
       let code = File.ReadAllText filename in
-      tryRun defaultContext code |> ignore
+      tryRun defaultContext filename code |> ignore
     | [] -> 
       printfn "nml REPL ver.???";
       printfn "";
-      printfn "type <term>;; to execute a term.";
-      printfn " term := 0, 1, .. / true / false / (t, t, ..) / [t; t; ..]";
-      printfn "       / x / t t / t; t / fun x y .. -> t / fun () -> t ";
-      printfn "       / let x = t in t / let f x .. = t in t / let f () = t in t";
-      printfn "       / if t then t else t / match t with pattern -> t | pattern -> t ..";
-      printfn "       / fixpoint f of pattern -> t  | pattern -> t ..";
-      printfn "       / <( t )> / let! x = t in t / t !; t";
+      printfn "type 'exit 0;;' to exit.";
       printfn "";
-      printfn "type 'showVars;;' to show predefined functions.";
-      printfn "example: let! x = readNat () in";
-      printfn "         let! y = readNat () in";
-      printfn "         print (x + y);;";
-      printfn "";
-      repl [] defaultContext "> "
+      repl defaultContext "> " 0 []
     | filename :: _ -> failwith "file doesn't exist"
     | _ -> ()
   0
