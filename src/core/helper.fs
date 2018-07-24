@@ -8,17 +8,17 @@ let argsmap f c =
 let matchPattern pat t =
   let rec mt pat t =
     match (pat, t) with
-      | (UTmConstruct ("Succ", [pred]), UTmLiteral (LNat n)) when n > 0u ->
+      | (UTmConstruct (["Succ"], [pred]), UTmLiteral (LNat n)) when n > 0u ->
         mt pred (UTmLiteral (LNat (n - 1u)))
-      | (UTmConstruct ("0", []), UTmLiteral (LNat 0u)) ->
+      | (UTmConstruct (["0"], []), UTmLiteral (LNat 0u)) ->
         []
       | (UTmTuple xs, UTmTuple ys) ->
         ys |> List.map2 mt xs |> List.concat
-      | (UTmConstruct (n, xs), UTmConstruct (m, ys)) when (n = m && List.length xs = List.length ys) ->
+      | (UTmConstruct (n, xs), UTmConstruct (m, ys)) when (List.last n = List.last m && List.length xs = List.length ys) ->
         ys |> List.map2 mt xs |> List.concat
       | (UTmLiteral x, UTmLiteral y) when x = y ->
         []
-      | (UTmFreeVar "_", y) -> []
+      | (UTmFreeVar ["_"], y) -> []
       | (UTmBoundVar x, y) -> [(x, y)]
       | _ -> failwith "matchfailed"
   in 
@@ -28,8 +28,8 @@ let matchPattern pat t =
     | _ -> None
 
 let rec expandCases = function
-  | UTmApply (UTmFreeVar "::", [l; r]) -> UTmConstruct ("Cons", [expandCases l; expandCases r])
-  | UTmLiteral (LNat 0u) -> UTmConstruct ("0", [])
+  | UTmApply (UTmFreeVar ["::"], [l; r]) -> UTmConstruct (["Cons"], [expandCases l; expandCases r])
+  | UTmLiteral (LNat 0u) -> UTmConstruct (["0"], [])
   | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
   | x -> x
 
@@ -57,11 +57,11 @@ let rec foldLet body binds =
 
 // a -> b -> c -> d --> ([a; b; c], d)
 let rec expandFun = function
-  | Scheme (_, t) -> expandFun t
-  | Fun (a, Fun (b, c)) ->
-    let (args, ret) = Fun (b, c) |> expandFun in
+  | TyScheme (_, t) -> expandFun t
+  | TyFun (a, TyFun (b, c)) ->
+    let (args, ret) = TyFun (b, c) |> expandFun in
     (a :: args, ret)
-  | Fun (a, b) ->
+  | TyFun (a, b) ->
     ([a], b)
   | x -> ([], x)
 
@@ -73,35 +73,45 @@ let rec foldFun builder args ret =
       builder (a, ret |> foldFun builder rest)
 
 let rec fvOf = function
-  | TypeVar n -> set [n]
-  | Fun (a, b) -> Set.union (fvOf a) (fvOf b)
-  | Deferred t -> fvOf t
-  | DataType (_, vs, ts, _) -> 
+  | TyVar n -> set [n]
+  | TyFun (a, b) -> Set.union (fvOf a) (fvOf b)
+  | TyDeferred t -> fvOf t
+  | TyDataType (_, vs, ts, _, _) -> 
     ts |> List.map (fun c -> c.args |> List.map fvOf) 
        |> List.concat
        |> List.fold Set.union (set [])
-       |> Set.union (Set.ofList (vs |> List.choose (function | TypeVar x -> Some x | _ -> None )))
-  | Scheme (vs, t) -> Set.difference (fvOf t) vs
+       |> Set.union (Set.ofList (vs |> List.choose (function | TyVar x -> Some x | _ -> None )))
+  | TyScheme (vs, t) -> Set.difference (fvOf t) vs
   | _ -> set []
 
 let getTimeOfType ty =
   let rec dig i = function
-    | Deferred x -> x |> dig (i + 1)
+    | TyDeferred x -> x |> dig (i + 1)
     | x -> (x, i)
   in dig 0 ty
 
 let rec delayTypeBy i ty =
   if (i > 0) then
-    Deferred ty |> delayTypeBy (i - 1)
+    TyDeferred ty |> delayTypeBy (i - 1)
   else
     ty
 
 let hasTyVar vname t =
   fvOf t |> Set.contains vname
 
+let rec containsSelf sn =
+  function
+    | TyDataTypeSelf (n, _) when n = sn -> true
+    | TyFun (a, b) -> containsSelf sn a || containsSelf sn b
+    | TyDataType (_, _, cstrs, _, _) ->
+      cstrs |> List.map (fun x -> x.args |> List.exists (containsSelf sn))
+            |> List.exists id
+    | TyDeferred t | TyScheme (_, t) -> containsSelf sn t
+    | _ -> false
+
 let rec isInductive vt =
   match vt with
-    | DataType (vname, vtargs, cts, _) ->
+    | TyDataType (vname, vtargs, cts, _, _) ->
       let hasRec = cts |> List.exists (fun c -> c.isRecursive) in
       let hasBottom = cts |> List.exists (fun c -> c.isRecursive |> not) in
       if (hasRec && hasBottom) then
@@ -113,7 +123,7 @@ let rec isInductive vt =
     | _ -> Some false
 
 let rec fvOfTerm = function
-  | UTmFreeVar x when x <> "_" -> set [x]
+  | UTmFreeVar [x] when x <> "_" -> set [x]
   | UTmApply (l, rs) ->
     l :: rs |> List.map (fvOfTerm >> Set.toList) |> List.concat |> Set.ofList
   | UTmTuple xs

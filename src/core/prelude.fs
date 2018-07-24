@@ -1,4 +1,4 @@
-﻿(*
+(*
 The X11 License
 prelude.fs - my prelude
 Copyright(c) 2018 cannorin
@@ -26,8 +26,6 @@ open System
 open System.Text.RegularExpressions
 
 let inline to_s x = x.ToString()
-
-let inline hashof x = x.GetHashCode()
 
 let inline (?|) opt df = defaultArg opt df
 
@@ -57,9 +55,9 @@ let (|DefaultValue|) dv x =
     | None -> dv
 
 module Flag =
-  let inline combine (xs: ^flag list) : ^flag
+  let inline combine (xs: ^flag seq) : ^flag
     when ^flag: enum<int> =
-      xs |> List.fold (|||) (Unchecked.defaultof< ^flag >)
+      xs |> Seq.fold (|||) (Unchecked.defaultof< ^flag >)
 
   let inline is (x: ^flag) (flags: ^flag) : bool
     when ^flag: enum<int> =
@@ -92,7 +90,7 @@ module String =
 
   let inline endsWith (s: ^a) (str: ^String) : bool = (^String: (member EndsWith: ^a -> bool) str, s)
 
-  let inline contains s (str: string) = str.Contains s
+  let inline contains (s: ^a) (str: ^String) : bool = (^String: (member IndexOf: ^a -> int) str, s) <> -1
 
   let inline findIndex (q: ^T) (str: ^String) = 
     (^String: (member IndexOf: ^T -> int) (str, q))
@@ -146,7 +144,39 @@ module String =
 
   let inline removeEmptyEntries (sp: string array) = sp |> Array.filter (String.IsNullOrEmpty >> not)
 
-  let inline toCharArray (s: string) = s.ToCharArray()
+  let inline toChars (s: string) = s.ToCharArray()
+
+  let inline ofChars (cs: char seq) = new String(cs |> Seq.toArray)
+
+  let inline nth i (str: string) = str.[i]
+
+  let inline rev (str: string) = 
+    new String(str.ToCharArray() |> Array.rev)
+
+  let inline private whileBase pred act str =
+    if String.IsNullOrEmpty str then
+      ""
+    else
+      let mutable i = 0
+      while i < String.length str && str |> nth i |> pred do i <- i + 1 done
+      if i = 0 then ""
+      else str |> act i
+
+  let inline take i str =
+    if i = 0 then ""
+    else if i >= String.length str then str
+    else removeAfter i str
+
+  let inline skip i str =
+    if i = 0 then str
+    else if i >= String.length str then ""
+    else substringAfter i str
+
+  let inline takeWhile predicate (str: string) =
+    whileBase predicate take str
+
+  let inline skipWhile predicate (str: string) =
+    whileBase predicate skip str
 
 let inline (!!) (x: Lazy<'a>) = x.Value
 
@@ -260,3 +290,18 @@ let inline intWithMeasure (_: measure<'m>) (i: ^i) : int<'m> =
 
 let inline floatWithMeasure (_: measure<'m>) (i: ^i) : float<'m> =
   (float i) * LanguagePrimitives.FloatWithMeasure<'m> 1.0
+
+module Path =
+  open System.IO
+  let makeRelativeTo parentDir file =
+    let filePath = new Uri(file)
+    let path =
+      new Uri (
+        if (parentDir |> String.endsWith (to_s Path.DirectorySeparatorChar) |> not) then
+          sprintf "%s%c" parentDir Path.DirectorySeparatorChar
+        else
+          parentDir
+      )
+    Uri.UnescapeDataString(path.MakeRelativeUri(filePath) |> to_s |> String.replace '/' Path.DirectorySeparatorChar)
+
+ 

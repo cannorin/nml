@@ -1,26 +1,31 @@
-MONO_PATH?=/usr/bin
+DOTNET_PATH?=/usr/bin
+PREFIX?=/usr/local
+REAL_PREFIX=$(shell realpath $(PREFIX))
 
-DOTNET?=$(shell which dotnet)
+DOTNET?=$(DOTNET_PATH)/dotnet
+GIT?=$(shell which git)
 
 all: release
 
 release: bin/Release/netcoreapp2.0/current-platform/nmli.dll
 
 bin/Release/netcoreapp2.0/current-platform/nmli.dll:
-	$(DOTNET) publish -c Release -o ../../bin/Release/netcoreapp2.0/current-platform/
+	$(DOTNET) publish -c Release -o ../../bin/Release/
 
 run: release
 	$(DOTNET) bin/Release/netcoreapp2.0/current-platform/nmli.dll
 
 
-self-contained-win:
-	$(DOTNET) publish -c Release --self-contained --runtime win-x64
+publish-windows:
+	$(DOTNET) publish -c Release --self-contained --runtime win-x64 -o ../../bin/publish/windows/
 
-self-contained-linux:
-	$(DOTNET) publish -c Release --self-contained --runtime linux-x64
+publish-linux:
+	$(DOTNET) publish -c Release --self-contained --runtime linux-x64 -o ../../bin/publish/linux/
 
-self-contained-osx:
-	$(DOTNET) publish -c Release --self-contained --runtime osx-x64
+publish-osx:
+	$(DOTNET) publish -c Release --self-contained --runtime osx-x64 -o ../../bin/publish/osx/
+
+publish: publish-windows publish-linux publish-osx ;
 
 
 debug: bin/Debug/netcoreapp2.0/nmli.dll
@@ -34,6 +39,7 @@ run-debug: debug
 # Clean
 
 clean:
+	$(DOTNET) clean
 	$(RM) -r src/core/obj
 	$(RM) -r src/interpreter/obj
 	$(RM) -r bin/

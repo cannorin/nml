@@ -68,7 +68,7 @@ Note that each computation in each stage is kept pure functional; everything imp
 ## Practical things
 
 - [x] Polymorphism
-    - [x] Let expression
+    - [x] Let expressions
     - [x] Type operators (eg. tuples)
     - [x] Forall quantifier
 - [x] Variants
@@ -79,12 +79,13 @@ Note that each computation in each stage is kept pure functional; everything imp
     - [x] Exhaustiveness check
     - [x] Matching functions (```function```)
 - [x] Operators
-    - [x] Operator definition (```let (+) l r = ...```)
+    - [x] Operator definitions (```let (+) l r = ...```)
     - [x] Use as a function
-- [ ] Top-level expressions
-    - [ ] Type definition
-    - [ ] Modules
-    - [ ] On REPL
+- [x] Top-level expressions
+    - [x] Let/Do expressions
+    - [x] Type definitions
+    - [x] Define/Open modules
+    - [x] On REPL
 
 ## Type system extensions
 
@@ -104,9 +105,9 @@ Note that each computation in each stage is kept pure functional; everything imp
 ## Runtime improvements
 - [x] REPL
     - [x] Line editor
-    - [ ] Suggestions & completions
+    - [x] Suggestions & completions
     - [x] Load and execute source files
-    - [ ] Import sources on the fly
+    - [x] Import sources on the fly
 - [ ] Compiler
 - [ ] Interop
     - [x] Built-in functions written in F# 

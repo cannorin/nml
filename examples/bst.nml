@@ -1,0 +1,41 @@
+inductive Bst a =
+    Node of a * Bst a * Bst a
+  | Leaf
+
+module Bst = begin
+  def insert x = 
+    fixpoint f of
+      Leaf -> Node (x, Leaf, Leaf)
+    | Node (y, left, right) ->
+      if x < y then
+        Node (y, f left, right)
+      else
+        Node (y, left, f right)
+  
+  def contains x =
+    fixpoint f of
+      Leaf -> false
+    | Node (y, left, right) ->
+      if x < y then f left
+      else if x = y then true
+      else f right
+
+  def height =
+    fixpoint f of
+      Leaf -> 0
+    | Node (_, left, right) ->
+      1 + max (f left) (f right)
+  
+  def itemsAtDepth depth tree =
+    let f = 
+      fixpoint f of
+        Leaf -> fun _ -> []
+      | Node (a, left, right) ->
+        begin fun d ->
+          if d = depth then
+            [a]
+          else
+            List.append (f left (d+1)) (f right (d+1))
+        end
+    in f tree 0
+end
