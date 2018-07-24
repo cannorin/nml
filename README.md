@@ -85,7 +85,7 @@ Note that each computation in each stage is kept pure functional; everything imp
     - [x] Let/Do expressions
     - [x] Type definitions
     - [x] Define/Open modules
-    - [ ] On REPL
+    - [x] On REPL
 
 ## Type system extensions
 
@@ -105,9 +105,9 @@ Note that each computation in each stage is kept pure functional; everything imp
 ## Runtime improvements
 - [x] REPL
     - [x] Line editor
-    - [ ] Suggestions & completions
+    - [x] Suggestions & completions
     - [x] Load and execute source files
-    - [ ] Import sources on the fly
+    - [x] Import sources on the fly
 - [ ] Compiler
 - [ ] Interop
     - [x] Built-in functions written in F# 
