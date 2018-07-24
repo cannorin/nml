@@ -64,7 +64,7 @@ type Type =
       | TyDataTypeSelf (n, []) -> sprint_qualified n
       | TyDataType (n, ts, _, _, _)
       | TyDataTypeSelf (n, ts) -> sprintf "%s %s" (sprint_qualified n) (ts |> List.map (to_sc false) |> String.concat " ")
-      | TyScheme (ts, t) -> sprintf "∀%s. %s" (ts |> String.concat ",") (to_s t)
+      | TyScheme (ts, t) -> sprintf "forall %s. %s" (ts |> String.concat " ") (to_s t)
 and Constructor =
   { name: string; args: Type list; isRecursive: bool; }
   

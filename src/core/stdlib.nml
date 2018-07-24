@@ -1,0 +1,92 @@
+variant Option a = Some of a | None
+variant Either a b = Left of a | Right of b
+inductive List a = Cons of a * List a | Nil
+
+def id x = x
+def ignore _ = ()
+def defaultArg o d = match o with Some x -> x | None -> d
+def (|>) x f = f x
+def (||>) x f = match x with (a, b) -> f a b
+def (|||>) x f = match x with (a, b, c) -> f a b c
+def (<|) f x = f x
+def (<||) f x = match x with (a, b) -> f a b
+def (<|||) f x = match x with (a, b, c) -> f a b c
+def (>>) f g x = g (f x)
+def (<<) g f x = g (f x)
+def (?|) x d = match x with Some x -> x | None -> d
+def (;) a b = let _ = a in b
+def (!;) a b = let! _ = a in b
+def (::) x t = Cons (x, t)
+
+def tryPred i = match i with Succ n -> Some n | 0 -> None
+def min x y = if x < y then x else y
+def max x y = if x > y then x else y
+
+module Option = begin
+  def isSome = function Some _ -> true | None -> false
+  def isNone = function Some _ -> false | None -> true
+  def map f = function Some x -> f x | None -> None
+  def filter p = function Some x -> if p x then Some x else None | None -> None
+  def default v = function Some x -> x | None -> v
+  def defaultWith f = function Some x -> x | None -> f ()
+end
+
+module List = begin
+  def append xs ys =
+    (
+	  fixpoint f of
+	     [] -> ys
+       | h :: t -> h :: f t
+    ) xs
+  
+  def find cond =
+    fixpoint f of
+      h :: t ->
+      if cond h then Some h else f t
+    | _ -> None
+  
+  def nth =
+    fixpoint next of
+      0 -> (
+        function
+          h :: _ -> Some h
+        | [] -> None
+      )
+    | Succ n ->
+      function
+        _ :: t -> next n t
+      | [] -> None
+  
+  def map f =
+    fixpoint g of
+      h :: t -> f h :: g t
+    | [] -> []
+  
+  def filter f =
+    fixpoint g of
+      h :: t ->
+        if f h then
+          h :: g t
+        else
+          g t
+    | [] -> []
+  
+  def sort l =
+    let ins x =
+	  fixpoint f of
+        h :: t ->
+          if (x < h) then
+            x :: h :: t
+          else
+            h :: (f t)
+      | [] -> [x]
+    in
+    let f =
+	  fixpoint f of
+        h :: t ->
+          begin fun resl ->
+            f t (ins h resl)
+          end
+      | [] -> id
+    in f l []
+end

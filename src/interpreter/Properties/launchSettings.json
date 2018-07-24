@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "nml.Interpreter": {
+      "commandName": "Project"
+    }
+  }
+}

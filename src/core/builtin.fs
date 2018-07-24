@@ -27,10 +27,7 @@ let DefPolyInductiveVariant name targs f =
   TypeContext (name, InductiveVariant ([name], targs |> List.map TyVar, f))
 
 let builtinTypes = [
-  DefPolyVariant "Option" ["a"] [ NewConst ("Some", [TyVar "a"]); NewConst ("None", []) ];
-  DefPolyVariant "Either" ["a"; "b"] [ NewConst ("Left", [TyVar "a"]); NewConst ("Right", [TyVar "b"]) ];
   DefInductiveVariant "Nat" (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]);
-  DefPolyInductiveVariant "List" ["a"] (fun self -> [ NewConst ("Nil", []); NewRecConst ("Cons", [TyVar "a"; self]) ])
 ]
 
 let impossible = UTmLiteral LUnit
@@ -82,7 +79,6 @@ let addTerm name term ctx =
     TermContext (name, (tt, t')) :: ctx
 
 let builtinTerms = [
-  DefRawCode "id" "fun x -> x";
   DefRawTerm "run_" (UTmFun (UTmRun (UTmBoundVar 0)));
   DefFun "exit" [TyNat] (TyDeferred TyUnit) (function
     | UTmLiteral (LNat x) :: _ -> Environment.Exit(int32 x); UTmLiteral LUnit
@@ -100,7 +96,6 @@ let builtinTerms = [
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a % b) |> UTmLiteral
     | _ -> impossible
   );
-  DefRawCode "tryPred" "fun i -> match i with Succ n -> Some n | 0 -> None";
   DefFun "-?" [TyNat; TyNat] (TyOption TyNat) (function
     | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
       if (a > b) then
@@ -137,7 +132,6 @@ let builtinTerms = [
     | UTmLiteral (LBool a) :: UTmLiteral (LBool b) :: _ -> (a || b) |> LBool |> UTmLiteral
     | _ -> impossible
   );
-  DefRawCode "ignore" "fun _ -> ()";
   DefFun "readNat" [TyUnit] (TyDeferred TyNat) (fun _ ->
       printf "readNat> ";
       Console.ReadLine()
@@ -155,30 +149,17 @@ let builtinTerms = [
       Console.ReadLine () |> ignore;
       UTmLiteral LUnit
   );
-  DefRawCode "defaultArg" "fun o d -> match o with Some x -> x | None -> d";
-  DefRawCode "|>" "fun x f -> f x";
-  DefRawCode "||>" "fun x f -> match x with (a, b) -> f a b";
-  DefRawCode "|||>" "fun x f -> match x with (a, b, c) -> f a b c"
-  DefRawCode "<|" "fun f x -> f x";
-  DefRawCode "<||" "fun f x -> match x with (a, b) -> f a b";
-  DefRawCode "<|||" "fun f x -> match x with (a, b, c) -> f a b c";
-  DefRawCode ">>" "fun f g x -> g (f x)";
-  DefRawCode "<<" "fun g f x -> g (f x)";
-  DefRawCode "?|" "fun x d -> match x with Some x -> x | None -> d";
-  DefRawCode ";" "fun a b -> let _ = a in b";
-  DefRawCode "!;" "fun a b -> let! _ = a in b";
-  //DefRawTerm "!;" (UTmFun (UTmFun (UTmLet ("_", UTmRun (UTmBoundVar 1), UTmBoundVar 0))));
-  DefRawCode "::" "fun x t -> Cons (x, t)";
 ]
 
-let testModule =
-  ModuleContext("Test",
-    [
-      TermContext("number", (TyNat, UTmLiteral (LNat 42u)))
-      DefRawCode "succ2" "fun a -> Succ (Succ a)"
-    ]
-  )
+open System.IO
 
-let defaultContext = testModule :: List.append builtinTypes builtinTerms
+let defaultContext =
+  let ctx = List.append builtinTypes builtinTerms
+  let stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib.nml")
+  let (_, stdlib) = 
+    File.ReadAllText stdlibPath
+      |> NmlParser.parseToplevelWithFileName stdlibPath
+      |> ParserUtils.toToplevelBase ctx NmlParser.parseToplevelWithFileName ctx []
+  stdlib @ ctx
 
 ()

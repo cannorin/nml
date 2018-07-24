@@ -11,6 +11,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{79
 	ProjectSection(SolutionItems) = preProject
 		examples/ackermann.nml = examples/ackermann.nml
 		examples/beta_reduction_inside_lambda.nml = examples/beta_reduction_inside_lambda.nml
+		examples/bst.nml = examples/bst.nml
 		examples/deep_recursion.nml = examples/deep_recursion.nml
 		examples/function_composition.nml = examples/function_composition.nml
 		examples/gcd.nml = examples/gcd.nml

@@ -36,21 +36,34 @@ module Context =
         ctx |> List.choose (chooser name)
             |> List.tryHead
       | modName :: qualifiedName ->
-        ctx |> List.choose (function | ModuleContext (n, ctx) when n = modName -> Some ctx | _ -> None)
-            |> List.choose (tryFindRec chooser qualifiedName)
-            |> List.tryHead
+        [
+          ctx |> List.choose (chooser "")
+              |> List.tryHead;
+          ctx |> List.choose (function | ModuleContext (n, ctx) when n = modName -> Some ctx | _ -> None)
+              |> List.choose (tryFindRec chooser qualifiedName)
+              |> List.tryHead
+        ] |> List.choose id |> List.tryHead
   
   let inline findTerm qualifiedName ctx =
-    tryFindRec (fun name -> function | TermContext (n, tm) when n = name -> Some tm | _ -> None) qualifiedName ctx
+    tryFindRec (fun name ->
+      function
+        | TermContext (n, tm) when n = name -> Some tm
+        | _ -> None
+    ) qualifiedName ctx
 
   let inline findType qualifiedName ctx =
-    tryFindRec (fun name -> function | TypeContext (n, ty) when n = name -> Some ty | _ -> None) qualifiedName ctx
+    tryFindRec (fun name -> 
+      function
+        | TypeContext (n, ty) when n = name -> Some ty
+        | TypeContext (_, TyDataType(n, _, _, _, _)) & TypeContext (_, ty) when n = qualifiedName -> Some ty
+        | _ -> None
+    ) qualifiedName ctx
 
   let inline findConstructor qualifiedName (args: 'a list option) ctx =
     let aLen = args |> Option.map List.length
     tryFindRec (fun name ->
                   function
-                    | TypeContext (tyname, TyDataType (vs, targs, ts, p, info)) ->
+                    | TypeContext (_, TyDataType (vs, targs, ts, p, info)) ->
                       ts |> List.tryFind (fun c -> c.name = name && aLen |> Option.map ((=) (List.length c.args)) ?| true)
                          |> Option.map (fun c -> (TyDataType (vs, targs, ts, p, info), c.args))
                     | _ -> None

@@ -1,4 +1,4 @@
-﻿module nml.Parser.NmlParser
+module nml.Parser.NmlParser
 
 open FParsec
 open nml.Ast
@@ -16,11 +16,15 @@ module private ParsecUtils =
   let ws x = x .>> spaces
   let syn x = pstring x |> ws
   let between s1 s2 p = syn s1 >>? p .>>? syn s2
+  let string_literal = 
+    let quote = skipStringCI "\""
+    quote >>. manyCharsTill anyChar quote |>> Uri.UnescapeDataString
+
   let listing sep x =
     sepBy1 x sep
 
   let toplevel_keywords =
-    set [ "open"; "module"; "type"; "variant"; "inductive"; "def"; "do"; ";;" ]
+    set [ "open"; "module"; "type"; "variant"; "inductive"; "def"; "do"; "import"; ";;" ]
 
   let term_keywords =
     set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; 
@@ -43,6 +47,10 @@ module private ParsecUtils =
 
   let name = identifier
   let qualified_name = sepBy1 name (pstring ".")
+
+  let op_chars = "+-*/<>%&|^~=!?:;".ToCharArray() |> Set.ofArray
+  let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>"; ";;" ]
+  let opvar = pstring "(" >>? many1Satisfy (isAnyOf op_chars) .>> pstring ")"
 
   let rawStream : Parser<CharStream<unit>, unit> =
     fun stream -> Reply(stream)
@@ -88,8 +96,6 @@ module private ParsecUtils =
   let infoConst cstr x =
     x |> getInfo |>> withinfof cstr
 
-
-
 let ty, tyRef = createParserForwardedToRef<ParsedType, unit>()
 let term, termRef = createParserForwardedToRef<ParsedTermWithInfo, unit>()
 let toplevel, toplevelRef = createParserForwardedToRef<ParsedTopLevelWithInfo, unit>()
@@ -126,7 +132,7 @@ let _ =
     addOp2Ext "/"  50 Associativity.Left
   // end of definitions.
 
-  let type_var = ws qualified_name |>> PTyVar
+  let type_var = ws (qualified_name <|> (opvar |>> List.singleton)) |>> PTyVar
 
   let type_app, taRef = createParserForwardedToRef<ParsedType, unit>()
 
@@ -155,11 +161,9 @@ let _ =
   
   do opp.TermParser <- attempt type_app <|> not_left_recursive
 
+
 // term parser
 let _ =
-  let op_chars = "+-*/<>%&|^~=!?:;".ToCharArray() |> Set.ofArray
-  let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>"; ";;" ]
-
   let (opp, addOp2Ext, addOp2Res) =
     prepareOpp
       op_chars
@@ -197,8 +201,6 @@ let _ =
     addOp2Ext "**" 60 Associativity.Right
   // end of definitions.
 
-  let opvar = pstring "(" >>? many1Satisfy (isAnyOf op_chars) .>> pstring ")"
-  
   let variable = ws (qualified_name <|> (opvar |>> List.singleton)) |> infoConst PTmVar
   let literal_nat = ws puint32 <?> "Nat" |> infoConst (LNat >> PTmLiteral)
   let literal_bool = ((stringReturn "true" true) <|> (stringReturn "false" false)) |> ws |> infoConst (LBool >> PTmLiteral)
@@ -302,7 +304,11 @@ let implicitModule =
   let inline (<+>) a b =
     a .>>.? b |>> (fun (x, y) -> List.append [x] y)
 
-  let toplevel_open = syn "open" >>? ws qualified_name .>>? optional (syn ";;") |> infoConst PTopOpen
+  let toplevel_import =
+    syn "import" >>? ws string_literal .>>? optional (syn ";;") |> infoConst PTopImport
+
+  let toplevel_open = 
+    syn "open" >>? ws qualified_name .>>? optional (syn ";;") |> infoConst PTopOpen
 
   let toplevel_module =
     tuple2
@@ -312,9 +318,9 @@ let implicitModule =
   
   let toplevel_let =
     tuple2
-      (syn "def" >>? sepEndBy name spaces1 .>>? syn "=")
+      (syn "def" >>? ws (name <|> opvar) .>>. sepEndBy name spaces1 .>>? syn "=")
       (ws term .>>? optional (syn ";;"))
-    |> infoConst (fun (name :: args, body) -> PTopTermDef (name, args, body))
+    |> infoConst (fun ((name, args), body) -> PTopTermDef (name, args, body))
   
   let toplevel_do = syn "do" >>? ws term .>>? optional (syn ";;") |> infoConst PTopDo
   
@@ -324,31 +330,39 @@ let implicitModule =
       ( (syn "of" >>? ty |>> Some) <|> (syn "" |>> fun _ -> None) )
   
   let toplevel_variantdef = 
-    tuple2 (syn "variant" >>? sepEndBy1 name spaces1)
+    tuple2 (syn "variant" >>? ws (name <|> opvar) .>>. sepEndBy name spaces1)
            (syn "=" >>? (syn "|" <|> syn "") >>?
               sepEndBy1 variantCase (syn "|")
            )
       |> infoConst (function
-        | name :: tprms, xs -> PTopTypeDef(PTTKVariant, name, tprms, xs)
-        | _,_ -> "" |> ParserFailed |> raise
+        | (name, tprms), xs -> PTopTypeDef(PTTKVariant, name, tprms, xs)
       )
 
   let toplevel_inductivedef = 
-    tuple2 (syn "inductive" >>? sepEndBy1 name spaces1)
+    tuple2 (syn "inductive" >>? ws (name <|> opvar) .>>. sepEndBy name spaces1)
            (syn "=" >>? (syn "|" <|> syn "") >>?
               sepEndBy1 variantCase (syn "|")
            )
       |> infoConst (function
-        | name :: tprms, xs -> PTopTypeDef(PTTKInductive, name, tprms, xs)
-        | _,_ -> "" |> ParserFailed |> raise
+        | (name, tprms), xs -> PTopTypeDef(PTTKInductive, name, tprms, xs)
       )
   
+  let toplevel_typedef_infer = 
+    tuple2 (syn "type" >>? ws (name <|> opvar) .>>. sepEndBy name spaces1)
+           (syn "=" >>? (syn "|" <|> syn "") >>?
+              sepEndBy1 variantCase (syn "|")
+           )
+      |> infoConst (function
+        | (name, tprms), xs -> PTopTypeDef(checkRecursiveDataType [name] xs, name, tprms, xs)
+      )
 
   do toplevelRef := choice [
+      toplevel_import;
       toplevel_open;
       toplevel_module;
       attempt toplevel_let;
       attempt toplevel_do;
+      attempt toplevel_typedef_infer;
       attempt toplevel_variantdef;
       attempt toplevel_inductivedef;
       attempt term |> infoConst PTopDo
@@ -365,10 +379,11 @@ let inline private parse parser text fileName =
       | Failure (msg, err, _) ->
           ParserFailed msg |> raise
 
-let inline parseTerm text = parse term text ""
-let inline parseType text = parse ty text ""
-let inline parseToplevel text = parse implicitModule text ""
+let inline parseTerm text = parse term text "builtin"
+let inline parseType text = parse ty text "builtin"
+let inline parseToplevel text = parse implicitModule text "builtin"
 
 let inline parseTermWithFileName fn text = parse term text fn
 let inline parseTypeWithFileName fn text = parse ty text fn
 let inline parseToplevelWithFileName fn text = parse implicitModule text fn
+

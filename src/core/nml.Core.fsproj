@@ -1,10 +1,13 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="stdlib.nml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="prelude.fs" />
     <Compile Include="prelude2.fs" />
@@ -15,7 +18,10 @@
     <Compile Include="parsedAst.fs" />
     <Compile Include="parser.fs" />
     <Compile Include="builtin.fs" />
+    <Compile Include="afterBuiltinDefined.fs" />
   </ItemGroup>
+
+  <ItemGroup />
 
   <ItemGroup>
     <PackageReference Include="FParsec" Version="1.0.3" />

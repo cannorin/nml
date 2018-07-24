@@ -146,23 +146,27 @@ let unify cs =
         let fvs = fvOf s
         let uniqVar =
           let rec f uniq =
-            let (v, uniq) = genUniq uniq
-            if fvs |> Set.contains v then
-              f uniq
-            else
-              TyVar v
+            seq {
+              let (v, uniq) = genUniq uniq
+              if fvs |> Set.contains v then
+                yield! f uniq
+              else
+                yield TyVar v
+                yield! f uniq
+            }
           f 0
-        let sb' = svar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| sb 
-        let tb' = tvar |> Seq.map (fun x -> (x, uniqVar)) |> Map.ofSeq |> Assign |> substAll <| tb
-        if sb' = tb' then
-          u rest
-        else
-          UnifyFailed (s, t, x) |> TyperFailed |> raise
-      | (s, t, u) :: _ & (TyDataType (_, _, _, _, lloc), TyDataType (_, _, _, _, rloc), _) :: _ 
-        when lloc.IsSome && rloc.IsSome ->
+        let newsvar, newtvar =
+          let us = uniqVar |> Seq.take (Set.count svar + Set.count tvar)
+          us |> Seq.take (Set.count svar), us |> Seq.skip (Set.count svar)
+        
+        let sb' = Seq.zip svar newsvar |> Map.ofSeq |> Assign |> substAll <| sb 
+        let tb' = Seq.zip tvar newtvar |> Map.ofSeq |> Assign |> substAll <| tb
+        (sb', tb', x) :: rest |> u
+      | (s, t, u) :: _ & (TyDataType (lname, _, _, _, lloc), TyDataType (rname, _, _, _, rloc), _) :: _ 
+        when List.last lname = List.last rname && lloc.IsSome && rloc.IsSome ->
         let (s', t') = prettify2 (s, t) in
         let msg =
-          sprintf "from different locations: '%s' and '%s'" (to_s lloc.Value) (to_s rloc.Value)
+          sprintf "from different locations:\n  %s\nand\n  %s" (to_s lloc.Value) (to_s rloc.Value)
         UnifyFailedWithMessage (msg, removeForall s', removeForall t', u) |> TyperFailed |> raise
       | (s, t, u) :: rest ->
         let (s', t') = prettify2 (s, t) in
@@ -421,9 +425,9 @@ and reconFromPatterns mth ctx uniq =
   let rec gh uq pat =
     match pat with
       | UTmConstruct (x, ys) ->
-        let (name, targs, cts, ctargs, nq, info) =
+        let (name, targs, cts, ctargs, nq, info, p) =
           match (ctx |> Context.findConstructor x (Some ys)) with
-            | Some (TyDataType (name, targs, cts, _, info), ctargs) ->
+            | Some (TyDataType (name, targs, cts, p, info), ctargs) ->
               let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
               let ((targs', cts', ctargs'), uniq) = 
                 (targs, cts, ctargs) |> rename uq tprms (fun f (x, y, z) -> 
@@ -434,7 +438,7 @@ and reconFromPatterns mth ctx uniq =
                     )
                   )
               in
-              (name, targs', cts', ctargs', uniq, info)
+              (name, targs', cts', ctargs', uniq, info, p)
             | _
             | None -> UnknownVar (x, ctx) |> TyperFailed |> raise
         in
@@ -444,7 +448,7 @@ and reconFromPatterns mth ctx uniq =
                  |> List.map2 (fun y -> (function | TyVar x -> Some (x, y) | _ -> None)) pts 
                  |> List.choose id |> Map.ofList |> Assign 
         in
-        let vt = TyDataType (name, targs, cts, ENull, info) |> substAll asgn in
+        let vt = TyDataType (name, targs, cts, p, info) |> substAll asgn in
         (fnq, vt)
       | UTmTuple xs ->
         let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
@@ -568,7 +572,10 @@ and exhaustiveCheck ptns t ctx =
             genReq mp (TyDataType (name, vts, cts', p, info))
           else
             [ UTmFreeVar ["_"] ]
-        | _ -> failwith "impossible_exhaustivenessCheck"
+        | _ -> 
+          printfn "%A" name;
+          printfn "%A" ctx;
+          failwith "impossible_exhaustivenessCheck"
     | TyVar _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
     | _ -> []
   in
@@ -599,12 +606,11 @@ let inferWithAnnotation ctx term typ =
 let infer term =
   inferWithContext [] term
 
-
 let printTypeError = function
   | UnifyFailed (a, b, ut) ->
     printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
   | UnifyFailedWithMessage (msg, a, b, ut) ->
-    printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n              %s\n------------> %s" (to_s a) (to_s b) msg (to_s ut)
+    printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n%s\n------------> %s" (to_s a) (to_s b) msg (to_s ut)
   | UnknownVar (n, ctx) ->
     printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
   | UnknownConst (n, ts, ctx) ->

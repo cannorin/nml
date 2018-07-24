@@ -1,6 +1,7 @@
-﻿namespace nml.Parser
+namespace nml.Parser
 
 open System
+open System.IO
 open nml
 open nml.Contexts
 open nml.Helper
@@ -38,10 +39,11 @@ module ParsedAst =
     | PTmOp2 of ParsedTermWithInfo * string * ParsedTermWithInfo
     | PTmMatch of ParsedTermWithInfo * (ParsedTermWithInfo * ParsedTermWithInfo) list
   
-  type PTTypeKind = PTTKVariant | PTTKInductive
+  type PTTypeKind = PTTKVariant | PTTKInductive | PTTKCoinductive
 
   type ParsedTopLevelWithInfo = WithInfo<ParsedTopLevel>
   and ParsedTopLevel =
+    | PTopImport of filename:string
     | PTopOpen of qualified_name
     | PTopModule of string * ParsedTopLevelWithInfo list
     | PTopTermDef of string * string list * ParsedTermWithInfo
@@ -49,6 +51,23 @@ module ParsedAst =
     | PTopDo of ParsedTermWithInfo
 
 module ParserUtils =
+
+  let checkRecursiveDataType (name: qualified_name) (cstrs: (string * ParsedType option) list) =
+    let rec dig = function
+      | PTyVar x -> x = name
+      | PTyApp (x, ts) -> x = name || ts |> List.exists dig
+      | PTyExplicit x
+      | PTyDefer x -> dig x
+      | PTyFun (a, b)
+      | PTyTuple (a, b) -> dig a || dig b
+    let cases =
+      cstrs |> List.map snd
+            |> List.map (function Some x -> dig x | None -> false)
+    match (cases |> List.exists id, cases |> List.forall id) with
+      | false, false -> PTTKVariant
+      | true, false -> PTTKInductive
+      | true, true -> PTTKCoinductive
+      | false, true -> failwith "impossible"
 
   let makeList t = 
     let rec m = function
@@ -80,10 +99,10 @@ module ParserUtils =
       | PTyVar ["Bool"] -> TyBool
       | PTyVar x ->
         match (ctx |> Context.findType x) with
-          | Some (TyDataType (_, [], cts, p, info)) ->
-            TyDataType (x, [], cts, p, info)
-          | Some (TyDataTypeSelf (_, [])) ->
-            TyDataTypeSelf (x, [])
+          | Some (TyDataType (n, [], cts, p, info)) ->
+            TyDataType (n, [], cts, p, info)
+          | Some (TyDataTypeSelf (n, [])) ->
+            TyDataTypeSelf (n, [])
           | Some (TyDataType _)
           | Some (TyDataTypeSelf _) ->
             sprintf "Insufficient type argument(s) for type constructor '%s'" (sprint_qualified x) |> ParserFailed |> raise
@@ -101,7 +120,7 @@ module ParserUtils =
           | _, x -> TyTuple [toKnownType ctx l; x]
       | PTyApp (name, ts) ->
         match (ctx |> Context.findType name) with
-          | Some (TyDataType (_, vts, cts, p, info)) ->
+          | Some (TyDataType (n, vts, cts, p, info)) ->
             if (List.length ts <> List.length vts) then
               sprintf "The length of type argument(s) is not correct for type constructor '%s'" (sprint_qualified name) |> ParserFailed |> raise
             
@@ -112,10 +131,10 @@ module ParserUtils =
                   |> Map.ofList
                   |> Assign in
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
-            TyDataType (name, ts, cts', p, info)
-          | Some (TyDataTypeSelf (_, vts)) ->
+            TyDataType (n, ts, cts', p, info)
+          | Some (TyDataTypeSelf (n, vts)) ->
             if List.length ts = List.length vts then
-              TyDataTypeSelf (name, ts |> List.map (toKnownType ctx))
+              TyDataTypeSelf (n, ts |> List.map (toKnownType ctx))
             else
               sprintf "The length of type argument(s) is not correct for type constructor '%s'" (sprint_qualified name) |> ParserFailed |> raise 
           | _ ->
@@ -185,46 +204,63 @@ module ParserUtils =
         NotImplementedException(sprintf "%A is not yet supported" (x.GetType().Name)) |> raise
     in tot [] pt
 
-  let rec toToplevelAndNewContext ctx (moduleName: qualified_name) =
+  let rec internal toToplevelBase ctx parser defaultCtx (moduleName: qualified_name) =
     let inline (+>>) x (xs, ctx) = (x :: xs, ctx)
+    let inline (@>>) xs1 (xs2, ctx) = (xs1 @ xs2, ctx)
     let inline orEmpty x = x |> Option.defaultValue (TyTuple [])
-    fun ptops ->
+    let rec tot ctx moduleName ptops =
       match (ptops |> List.map itemof, ptops) with
-      | toplevel :: _, toplevel_withinfo :: remaining ->
-        let info = toplevel_withinfo.info
-        match toplevel with
-          | PTopOpen qn ->
-            TopOpen (qn, info) +>> toToplevelAndNewContext (ctx |> Context.openModule qn) moduleName remaining
-          | PTopModule (name, toplevels) ->
-            let top = TopModule(name, toplevels |> toToplevelAndNewContext ctx (moduleName @ [name]) |> fst, info)
-            top +>> toToplevelAndNewContext (ctx |> Context.addToplevels [top] (fun _ -> id)) moduleName remaining
-          | PTopTermDef (name, args, pt) ->
-            let tm =
-              makeFun (args, pt)
-                 |> sameInfoOf pt
-                 |> toUntypedTerm ctx
-            let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
-            TopTermDef (name, (ty, tm), info) +>> toToplevelAndNewContext (ctx |> Context.addTerm name (ty, tm)) moduleName remaining
-          | PTopDo pt ->
-            let tm = toUntypedTerm ctx pt
-            let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
-            TopDo ((ty, tm), info) +>> toToplevelAndNewContext ctx moduleName remaining
-          | PTopTypeDef (kind, name, typrms, cstrs) ->
-            let qualifiedName = moduleName @ [name]
-            let ctx' =
-              match kind with
-                | PTTKVariant -> ctx
-                | PTTKInductive -> ctx |> Context.addType name (TyDataTypeSelf(qualifiedName, typrms |> List.map TyVar))
-            let cstrs' =
-              cstrs |> List.map (fun (n, pt) -> (n, pt |> Option.map (toKnownType ctx') |> orEmpty))
-                    |> List.map (fun (n, ty) ->
-                        match ty with
-                          | TyTuple ts ->
-                            { name = n; args = ts; isRecursive = ts |> List.exists (containsSelf qualifiedName) }
-                          | _ ->
-                            { name = n; args = [ty]; isRecursive = containsSelf qualifiedName ty }
-                       )
-            let ty = TyDataType(qualifiedName, typrms |> List.map TyVar, cstrs', ENull, info)
-            TopTypeDef(name, ty, info) +>> toToplevelAndNewContext (ctx |> Context.addType name ty) moduleName remaining
-      | [], _
-      | _, [] -> ([], ctx)
+        | toplevel :: _, toplevel_withinfo :: remaining ->
+          let info = toplevel_withinfo.info
+          match toplevel with
+            | PTopImport filename ->
+              let sourceDir =
+                match info with
+                  | Some i when File.Exists i.fileName -> Path.GetDirectoryName i.fileName
+                  | _ -> Directory.GetCurrentDirectory()
+              let destPath = Path.Combine(sourceDir, filename) |> Path.GetFullPath
+              if File.Exists destPath |> not then
+                sprintf "Import: file '%s' not found" destPath |> ParserFailed |> raise
+              let (extTop, extCtx) =
+                parser destPath (File.ReadAllText destPath)
+                  |> tot defaultCtx [destPath |> Path.GetFileName]
+              extTop @>> tot (extCtx @ ctx) moduleName remaining
+            | PTopOpen qn ->
+              TopOpen (qn, info) +>> tot (ctx |> Context.openModule qn) moduleName remaining
+            | PTopModule (name, toplevels) ->
+              let top = TopModule(name, toplevels |> tot ctx (moduleName @ [name]) |> fst, info)
+              top +>> tot (ctx |> Context.addToplevels [top] (fun _ -> id)) moduleName remaining
+            | PTopTermDef (name, args, pt) ->
+              let tm =
+                makeFun (args, pt)
+                   |> sameInfoOf pt
+                   |> toUntypedTerm ctx
+              let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
+              TopTermDef (name, (ty, tm), info) +>> tot (ctx |> Context.addTerm name (ty, tm)) moduleName remaining
+            | PTopDo pt ->
+              let tm = toUntypedTerm ctx pt
+              let (tm, ty) = Typer.inferWithContext (ctx |> Context.termMap fst) tm
+              TopDo ((ty, tm), info) +>> tot ctx moduleName remaining
+            | PTopTypeDef (kind, name, typrms, cstrs) ->
+              let qualifiedName = moduleName @ [name]
+              let ctx' =
+                match kind with
+                  | PTTKVariant -> ctx
+                  | PTTKInductive -> ctx |> Context.addType name (TyDataTypeSelf(qualifiedName, typrms |> List.map TyVar))
+                  | _ -> ParserFailed "coinductive datatypes are not supported" |> raise
+              let cstrs' =
+                cstrs |> List.map (fun (n, pt) -> (n, pt |> Option.map (toKnownType ctx') |> orEmpty))
+                      |> List.map (fun (n, ty) ->
+                          match ty with
+                            | TyTuple ts ->
+                              { name = n; args = ts; isRecursive = ts |> List.exists (containsSelf qualifiedName) }
+                            | _ ->
+                              { name = n; args = [ty]; isRecursive = containsSelf qualifiedName ty }
+                         )
+              let printer : EqualityNull<string * Printf.StringFormat<string -> string>> =
+                if is_op name then EValue (sprintf " %s " name, "%s") else ENull
+              let ty = TyDataType(qualifiedName, typrms |> List.map TyVar, cstrs', printer, info)
+              TopTypeDef(name, ty, info) +>> tot (ctx |> Context.addType name ty) moduleName remaining
+        | [], _
+        | _, [] -> ([], ctx)
+    tot ctx moduleName
