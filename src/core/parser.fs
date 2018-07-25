@@ -149,7 +149,7 @@ let _ =
 
   do taRef := not_left_recursive .>>.? sepEndBy1 not_left_recursive spaces |>> (function
       | x, [] -> x
-      | PTyVar x, argst -> PTyApp (x, argst |> List.rev)
+      | PTyVar x, argst -> PTyApp (x, argst)
       | _,_ -> failwith "impossible"
     )
 

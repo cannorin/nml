@@ -142,26 +142,7 @@ let unify cs =
       | (TyDataType (lname, lts, _, _, lloc), TyDataType (rname, rts, _, _, rloc), t) :: rest
         when (lname = rname && List.length lts = List.length rts && lloc = rloc) ->
         rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-      | (TyScheme (svar, sb), TyScheme (tvar, tb), _) :: _ & (s, t, x) :: rest when fvOf s = fvOf t ->
-        let fvs = fvOf s
-        let uniqVar =
-          let rec f uniq =
-            seq {
-              let (v, uniq) = genUniq uniq
-              if fvs |> Set.contains v then
-                yield! f uniq
-              else
-                yield TyVar v
-                yield! f uniq
-            }
-          f 0
-        let newsvar, newtvar =
-          let us = uniqVar |> Seq.take (Set.count svar + Set.count tvar)
-          us |> Seq.take (Set.count svar), us |> Seq.skip (Set.count svar)
-        
-        let sb' = Seq.zip svar newsvar |> Map.ofSeq |> Assign |> substAll <| sb 
-        let tb' = Seq.zip tvar newtvar |> Map.ofSeq |> Assign |> substAll <| tb
-        (sb', tb', x) :: rest |> u
+
       | (s, t, u) :: _ & (TyDataType (lname, _, _, _, lloc), TyDataType (rname, _, _, _, rloc), _) :: _ 
         when List.last lname = List.last rname && lloc.IsSome && rloc.IsSome ->
         let (s', t') = prettify2 (s, t) in
@@ -576,8 +557,7 @@ and exhaustiveCheck ptns t ctx =
           printfn "%A" name;
           printfn "%A" ctx;
           failwith "impossible_exhaustivenessCheck"
-    | TyVar _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
-    | _ -> []
+    | _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
   in
   let possiblePatterns = genReq dmp t in
   let unmatched =
