@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <DefineConstants>$(DefineConstants);PRELUDE_EXPOSE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

@@ -20,7 +20,11 @@ THE SOFTWARE.
 *)
 
 [<AutoOpen>]
+#if PRELUDE_EXPOSE
 module Prelude
+#else
+module internal Prelude
+#endif
 
 open System
 open System.Text.RegularExpressions
@@ -55,10 +59,9 @@ let (|DefaultValue|) dv x =
     | None -> dv
 
 module Flag =
-  let inline combine (xs: ^flag seq) : ^flag
+  let inline combine (xs: ^flag list) : ^flag
     when ^flag: enum<int> =
-      xs |> Seq.fold (|||) (Unchecked.defaultof< ^flag >)
-
+      xs |> List.fold (|||) (Unchecked.defaultof< ^flag >)
   let inline is (x: ^flag) (flags: ^flag) : bool
     when ^flag: enum<int> =
       (x &&& flags) = x 
@@ -81,6 +84,29 @@ module Number =
       Some ret
     else
       None
+
+[<AutoOpen>]
+module Kvp =
+  open System.Collections.Generic
+  type kvp<'a, 'b> = KeyValuePair<'a, 'b>
+  let inline KVP (a, b) = kvp(a, b)
+  let (|KVP|) (x: kvp<_, _>) = (x.Key, x.Value)
+
+[<AutoOpen>]
+module Nat =
+  type nat = uint32
+
+  let inline S i = i + 1u
+  [<Literal>]
+  let Z = 0u
+  
+  let (|S|Z|) i = if i = 0u then Z else S (i-1u)
+
+let inline succ (n: ^number) =
+  n + LanguagePrimitives.GenericOne< ^number >
+
+let inline pred (n: ^number) =
+  n - LanguagePrimitives.GenericOne< ^number >
 
 module String =
   open System.Text
@@ -226,6 +252,11 @@ module Result =
       | Ok x -> Choice1Of2 x
       | Error e -> Choice2Of2 e
 
+  let inline ofOption opt =
+    match opt with
+      | Some x -> Ok x
+      | None -> Error ()
+
   let inline ofChoice cic =
     match cic with
       | Choice1Of2 x -> Ok x
@@ -257,7 +288,7 @@ module PerformanceMeasurement =
           yield stopWatch.Elapsed.TotalMilliseconds
       }
     in
-    printfn "%A: %fms" task (Seq.average times);
+    printfn "%A: %gms" task (Seq.average times);
     task ()
 
 module Async =
@@ -266,6 +297,8 @@ module Async =
   open Microsoft.FSharp.Control
 
   let inline run x = Async.RunSynchronously x
+  let inline returnValue x = async { return x }
+  let inline bind f m = async { let! x = m in return! f x }
 
   let withTimeout (timeout : TimeSpan) a =
     async {
@@ -277,6 +310,68 @@ module Async =
         | :? TimeoutException -> return None
     }
 
+module Shell =
+  open System.Diagnostics
+
+  let inline eval cmd args =
+    let p = new Process()
+    p.EnableRaisingEvents <- false;
+    p.StartInfo.UseShellExecute <- false;
+    p.StartInfo.FileName <- cmd;
+    p.StartInfo.Arguments <- args |> String.concat " ";
+    p.StartInfo.RedirectStandardInput <- true;
+    p.StartInfo.RedirectStandardOutput <- true;
+    p.Start() |> ignore;
+    p.WaitForExit();
+    p.StandardOutput.ReadToEnd()
+
+  let inline evalAsync cmd args =
+    async {
+      let p = new Process()
+      do p.EnableRaisingEvents <- false;
+      do p.StartInfo.UseShellExecute <- false;
+      do p.StartInfo.FileName <- cmd;
+      do p.StartInfo.Arguments <- args |> String.concat " ";
+      do p.StartInfo.RedirectStandardInput <- true;
+      do p.StartInfo.RedirectStandardOutput <- true;
+      do p.Start() |> ignore;
+      do p.WaitForExit();
+      return p.StandardOutput.ReadToEnd()
+    }
+
+  let inline pipe cmd args stdin =
+    eval "sh" ["-c"; sprintf "'echo \"%s\" | %s %s'" stdin cmd (args |> String.concat " ")]
+
+  let inline pipeAsync cmd args stdin =
+    evalAsync "sh" ["-c"; sprintf "'echo \"%s\" | %s %s'" stdin cmd (args |> String.concat " ")]
+
+  let inline run cmd args =
+    let p = new Process()
+    p.EnableRaisingEvents <- false;
+    p.StartInfo.UseShellExecute <- false;
+    p.StartInfo.FileName <- cmd;
+    p.StartInfo.Arguments <- args |> String.concat " ";
+    p.Start() |> ignore;
+    p.WaitForExit(); 
+
+  let inline runAsync cmd args =
+    async {
+      let p = new Process()
+      do p.EnableRaisingEvents <- false;
+      do p.StartInfo.UseShellExecute <- false;
+      do p.StartInfo.FileName <- cmd;
+      do p.StartInfo.Arguments <- args |> String.concat " ";
+      do p.Start() |> ignore;
+      do p.WaitForExit(); 
+      return ()
+    }
+  
+  let inline envVar name =
+    match Environment.GetEnvironmentVariable name with
+      | x when String.IsNullOrEmpty x ->
+        eval "sh" ["-c"; sprintf "'echo %s'" name] |> String.replace Environment.NewLine ""
+      | x -> x
+
 type TypeWrapper<'T> = struct end
 type ty<'T> = TypeWrapper<'T>
 let inline ty<'T> = Unchecked.defaultof<ty<'T>>
@@ -286,10 +381,10 @@ type measure< [<Measure>] 'm > = MeasureWrapper<'m>
 let inline measure< [<Measure>] 'm > = Unchecked.defaultof<measure<'m>>
 
 let inline intWithMeasure (_: measure<'m>) (i: ^i) : int<'m> =
-  (int i) * LanguagePrimitives.Int32WithMeasure<'m> 1
+  LanguagePrimitives.Int32WithMeasure<'m> (int i)
 
 let inline floatWithMeasure (_: measure<'m>) (i: ^i) : float<'m> =
-  (float i) * LanguagePrimitives.FloatWithMeasure<'m> 1.0
+  LanguagePrimitives.FloatWithMeasure<'m> (float i)
 
 module Path =
   open System.IO
@@ -303,5 +398,3 @@ module Path =
           parentDir
       )
     Uri.UnescapeDataString(path.MakeRelativeUri(filePath) |> to_s |> String.replace '/' Path.DirectorySeparatorChar)
-
- 

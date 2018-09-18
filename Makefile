@@ -7,13 +7,13 @@ GIT?=$(shell which git)
 
 all: release
 
-release: bin/Release/netcoreapp2.0/current-platform/nmli.dll
+release: bin/Release/netcoreapp2.0/nmli.dll
 
-bin/Release/netcoreapp2.0/current-platform/nmli.dll:
+bin/Release/netcoreapp2.0/nmli.dll:
 	$(DOTNET) publish -c Release -o ../../bin/Release/
 
 run: release
-	$(DOTNET) bin/Release/netcoreapp2.0/current-platform/nmli.dll
+	$(DOTNET) run -c Release -p src/interpreter/nml.Interpreter.fsproj
 
 
 publish-windows:

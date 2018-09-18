@@ -4,147 +4,162 @@ open nml.Ast
 open nml.Helper
 open nml.Contexts
 open Microsoft.FSharp.Collections
+open With
 
-let isValue t =
-  let rec isValue i = function
-    | UTmLiteral _ -> true
-    | UTmTuple xs
-    | UTmConstruct (_, xs) -> xs |> List.forall (isValue i)
-    | UTmFun x -> x |> isValue (i + 1)
-    | UTmBoundVar j -> j < i
-    | UTmDefer _
-    | UTmExternal _ -> true
-    | _ -> false
-  in isValue 0 t
+let rec replace  (ctx: Context<EracedTerm>) stack (Item tm) =
+  noinfo <|
+    match tm with
+      | TmFreeVar vname ->
+        match ctx |> Context.findTerm vname with
+          | Some value -> replace ctx stack value |> itemof
+          | None -> tm
+      | TmBoundVar i when (i < List.length stack) ->
+        (stack.[i] ?| noinfo (TmBoundVar i)).item
+      | TmLet (vn, tv, tb) ->
+        let ctx' = ctx |> Context.removeTerm vn
+        TmLet (vn, tv |> replace ctx stack, tb |> replace ctx' stack)
+      | TmTuple xs -> TmTuple (xs |> List.map (replace ctx stack))
+      | TmConstruct (n, xs) -> TmConstruct (n, xs |> List.map (replace ctx stack))
+      | TmApply (l, rs) -> TmApply (replace ctx stack l, rs |> List.map (replace ctx stack))
+      | TmDefer (t, x) -> TmDefer (t, replace' ctx stack x)
+      | TmFunction (ft, cs) ->
+        let dc = match ft with FunNormal -> 0 | _ -> 1
+        TmFunction (
+          ft,
+          cs |> List.map (fun (pt, bd) ->
+            pt,
+            bd |> replace ctx ((None |> List.replicate (dc + countFvOfPattern pt)) @ stack)
+          )
+        )
+      | TmBoundVar _ | TmLiteral _ | TmBuiltin _ | TmRunnableBuiltin _ -> tm
 
-let rec shift c d = function
-  | UTmBoundVar i when i >= c -> UTmBoundVar (i + d)
-  | UTmFun b -> UTmFun (b |> shift (c + 1) d)
-  | UTmApply (l, rs) -> UTmApply (l |> shift c d, rs |> List.map (shift c d))
-  | UTmLet (n, v, b) -> UTmLet (n, v |> shift c d, b |> shift c d)
-  | UTmTuple xs -> UTmTuple (xs |> List.map (shift c d))
-  | UTmConstruct (n, xs) -> UTmConstruct (n, xs |> List.map (shift c d))
-  | UTmMatch (x, cs) -> UTmMatch (x |> shift c d, cs |> List.map (fun (p, b) -> (p, b |> shift (c + countFvOfPattern p) d)))
-  | UTmFixMatch cs -> UTmFixMatch (cs |> List.map (fun (p, b) -> (p, b |> shift (c + 1 + countFvOfPattern p) d)))
-  | UTmDefer x -> UTmDefer (x |> shift c d)
-  | UTmRun x -> UTmRun (x |> shift c d)
-  | x -> x
+and     replace' (ctx: Context<EracedTerm>) stack (Item tm) =
+  noinfo <|
+    match tm with
+      | TmRun (ti, tm) -> TmRun (ti, tm |> replace ctx stack)
+      | TmLetRun (vn, ti, tv, tb) ->
+        let ctx' = ctx |> Context.removeTerm vn
+        TmLetRun (vn, ti, tv |> replace ctx stack, tb |> replace ctx' stack)
 
+let rec shift c d (tm: EracedTerm) =
+  noinfo <|
+    match tm.item with
+      | TmBoundVar i when i >= c -> TmBoundVar (i + d)
+      | TmFun b -> TmFun (b |> shift (c + 1) d)
+      | TmApply (l, rs) -> TmApply (l |> shift c d, rs |> List.map (shift c d))
+      | TmLet (n, v, b) -> TmLet (n, v |> shift c d, b |> shift c d)
+      | TmTuple xs -> TmTuple (xs |> List.map (shift c d))
+      | TmConstruct (n, xs) -> TmConstruct (n, xs |> List.map (shift c d))
+      | TmFunction (ft, cs) ->
+        let dc = match ft with FunNormal -> 0 | _ -> 1
+        TmFunction (ft,
+          cs |> List.map (fun (p, b) -> (p, b |> shift (c + dc + countFvOfPattern p) d)))
+      | TmDefer (t, x) -> TmDefer (t, x |> shift' c d)
+      | TmLiteral _ | TmBoundVar _ | TmFreeVar _ | TmBuiltin _ | TmRunnableBuiltin _ -> tm.item
+and shift' c d (tm: EracedTemporalTerm) =
+  noinfo <|
+    match tm.item with
+      | TmRun (t, x) -> TmRun (t, x |> shift c d)
+      | TmLetRun (n, t, v, b) -> TmLetRun (n, t, v |> shift c d, b |> shift c d)
 
-type EvalMode = Reduce | Replace | Run
-let inline isReplace x = match x with | Replace -> true | _ -> false
+let rec e' (ctx: Context<EracedTerm>) stack (tm: EracedTemporalTerm) : EracedTerm =
+  match tm.item with
+    | TmRun (ti, tm) ->
+      match ti, tm |> e ctx stack with
+        | ti, Item (TmApply (Item (TmRunnableBuiltin (_, _, EValue f)), args)) ->
+          match f.Eval (ti, args |> List.map (e ctx stack)) with
+            | Some tm' -> tm' |> e ctx stack
+            | None     -> undefined ()
 
-let rec e (ctx: Context<UntypedTerm>) stack mode = function
-  | UTmFreeVar name ->
-    ctx |> Context.findTerm name ?| UTmFreeVar name
-  | UTmBoundVar i when (i < List.length stack) ->
-    stack.[i] ?| UTmBoundVar i
-  
-  | UTmFun x ->
-    x |> e ctx (None :: stack |> List.map (Option.map (shift 0 1))) mode |> UTmFun
-  
-  | UTmLet (name, value, body) ->
-    if (mode |> isReplace) then
-      UTmLet (name, value |> e ctx stack mode, body |> e (ctx |> Context.removeTerm name) stack mode)
-    else
-      body |> e (ctx |> Context.addTerm name (value |> e ctx stack mode)) stack mode
-  | UTmLetDefer _ ->
-    failwith "impossible_e"
-
-  | UTmTuple xs ->
-    xs |> List.map (e ctx stack mode) |> UTmTuple
-  | UTmConstruct (["Succ"], [UTmLiteral (LNat x)]) -> UTmLiteral (LNat (x + 1u))
-  | UTmConstruct (["Succ"], [x]) ->
-    UTmApply (UTmFreeVar ["+"], [UTmLiteral (LNat 1u); x |> e ctx stack mode]) |> e ctx stack mode
-  | UTmConstruct (name, xs) ->
-    UTmConstruct (name, xs |> List.map (e ctx stack mode))
-  
-  | UTmApply (l, []) -> l |> e ctx stack mode
-  | UTmApply (UTmApply (l, rs1), rs2) ->
-    UTmApply (l, List.append rs1 rs2) |> e ctx stack mode
-  | UTmApply (UTmFreeVar n, rs) ->
-    match (ctx |> Context.findTerm n) with
-      | Some l -> UTmApply (l, rs) |> e ctx stack mode
-      | None -> UTmApply (UTmFreeVar n, rs |> List.map (e ctx stack mode))
-  | UTmApply (UTmBoundVar i, rs) when (i < List.length stack) ->
-    match (stack |> List.item i) with
-      | Some l -> UTmApply (l, rs) |> e ctx stack mode
-      | None -> UTmApply (UTmBoundVar i, rs |> List.map (e ctx stack mode))
-  | UTmApply (l, rs) when (mode |> isReplace) ->
-    UTmApply (l |> e ctx stack Replace, rs |> List.map (e ctx stack Replace))
-  | UTmApply (UTmFun body, r :: rest) ->
-    UTmApply (body |> e ctx ((Some r :: stack) |> List.map (Option.map (shift 0 1))) Replace |> shift 0 -1, rest) |> e ctx stack mode
-  | UTmApply (UTmFixMatch cases, r :: rest) ->
-    match (r |> e ctx stack mode) with
-      | x when (isValue x) ->
-        match (cases |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
-          | Some (bind, body) ->
-            let s = List.length bind + 1 in
-            let ufm = UTmFixMatch cases |> shift 0 s |> e ctx stack mode in
-            let bind' = bind |> List.map (shift 0 s >> Some) in
-            let stack' = stack |> List.map (Option.map (shift 0 s)) in
-            let mt = body |> e ctx (bind' @ [Some ufm] @ stack') Replace |> shift 0 -s in
-            UTmApply(mt, rest) |> e ctx stack mode
-          | None ->
-            printfn "%s" (UTmApply (UTmFixMatch cases, x :: rest) |> to_s);
-            failwith "match failed"
-      | x -> UTmApply (UTmFixMatch cases |> e ctx stack mode, x :: (rest |> List.map (e ctx stack mode)))
-  | UTmApply (UTmExternal (f, t), rs) ->
-    let (targs, _) = t |> expandFun in
-    if (List.length rs = List.length targs) then
-      if (rs |> List.forall isValue) then
-        f.value rs |> e ctx stack mode
-      else
-        match (rs |> List.map (e ctx stack mode)) with
-          | xs when (xs |> List.forall isValue) ->
-            f.value xs |> e ctx stack mode
-          | xs -> UTmApply (UTmExternal (f, t), xs)
-    else if (List.length rs > List.length targs) then
-      let (args, rest) = rs |> List.splitAt (List.length targs) in
-      UTmApply (UTmApply (UTmExternal (f, t), args) |> e ctx stack mode, rest)
-    else
-      UTmApply (UTmExternal (f, t), rs)
-  
-  | UTmMatch (x, cs) ->
-    match (x |> e ctx stack mode) with
-      | x when (x |> isValue && mode |> isReplace |> not) ->
-        match (cs |> List.choose (fun (pt, bd) -> matchPattern pt x |> Option.map (fun bind -> (bind, bd))) |> List.tryHead) with
-          | Some (bind, body) ->
-            let bind = bind |> List.map Some in
-            body |> e ctx (bind @ stack) mode
-          | None ->
-            printfn "%s" (to_s (UTmMatch (x, cs)));
-            failwith "match failed"
-      | x ->
-        UTmMatch (x, cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (countFvOfPattern pt) (fun _ -> None) @ stack |> List.map (Option.map (shift 0 (countFvOfPattern pt)))) mode)))
-  
-  | UTmFixMatch cs ->
-    UTmFixMatch (cs |> List.map (fun (pt, bd) -> (pt, bd |> e ctx (List.init (1 + countFvOfPattern pt) (fun _ -> None) @ stack |> List.map (Option.map (shift 0 (1 + countFvOfPattern pt)))) mode)))
- 
-  | UTmDefer x ->
-    match mode with
-      | Run -> x |> e ctx stack Reduce |> UTmDefer
-      | _ -> x |> e ctx stack Replace |> UTmDefer
- 
-  | UTmRun x ->
-    let m = if (mode |> isReplace) then mode else Run in
-    match (x |> e ctx stack m) with
-      | UTmDefer x -> x |> e ctx stack mode
-      | x -> 
-        if (x |> isValue) then
-          x
-        else
-          UTmRun (x |> e ctx stack mode)
+        | TimeInf, Item (TmDefer (_, tm)) ->
+          TmRun (TimeInf, tm |> e' ctx stack) |> noinfo |> e' ctx stack
+        | TimeInf, tm -> tm
+        
+        | TimeN _,     Item (TmDefer (TimeInf, tm)) ->
+          TmDefer (TimeInf, tm) |> noinfo
+        | TimeN (S n), Item (TmDefer (TimeN (S m), tm)) ->
+          TmRun (TimeN n, noinfo <| TmDefer (TimeN m, tm))
+          |> noinfo |> e' ctx stack
+        | TimeN _, tm -> tm
     
-  | x -> x
+    | TmLetRun (vname, time, tmvalue, tmbody) ->
+      let tmvalue' = TmRun (time, tmvalue) |> noinfo |> e' ctx stack
+      tmbody |> e (ctx |> Context.addTerm vname tmvalue') stack
 
-let eval ctx t =
-  t |> e ctx [] Reduce
+and     e  (ctx: Context<EracedTerm>) stack (tm: EracedTerm) : EracedTerm =
+  match tm.item with
+    | TmLiteral l -> TmLiteral l |> noinfo
 
-type NextResult = Reducible of UntypedTerm | Halted of UntypedTerm
+    | TmFreeVar vname ->
+      match ctx |> Context.findTerm vname with
+        | Some value -> e ctx stack value
+        | None -> tm
+    | TmBoundVar i when (i < List.length stack) ->
+      stack.[i] ?| noinfo (TmBoundVar i)
+    | TmBoundVar _ -> tm
+    
+    | TmLet (vname, tmvalue, tmbody) ->
+      let tmvalue' = tmvalue |> e ctx stack
+      tmbody |> e (ctx |> Context.addTerm vname tmvalue') stack
 
-let next ctx t =
-  match (eval ctx t) with
-    | UTmDefer x -> Reducible x
-    | x -> Halted x
+    | TmTuple xs -> TmTuple (xs |> List.map (e ctx stack)) |> noinfo
+    | TmConstruct (n, xs) -> TmConstruct (n, xs |> List.map (e ctx stack)) |> noinfo
 
+    | TmApply (tm, []) -> e ctx stack tm
+    | TmApply (Item (TmApply (l, rs1)), rs2) ->
+      TmApply (l, rs1 @ rs2) |> noinfo |> e ctx stack
+    | TmApply (Item (TmFreeVar var), args)
+      when ctx |> Context.findTerm var |> Option.isSome ->
+        TmApply (ctx |> Context.findTerm var |> Option.get, args)
+        |> noinfo |> e ctx stack
+    | TmApply (Item (TmBoundVar i), args) 
+      when List.length stack > i && stack.[i].IsSome ->
+        TmApply (stack.[i].Value, args) |> noinfo |> e ctx stack
+    | TmApply (Item (TmBuiltin (_, _, EValue f)), args) ->
+      match f.Eval (args |> List.map (e ctx stack)) with
+        | Some tm' -> tm' |> e ctx stack
+        | None     -> undefined ()
+
+    | TmApply (Item (TmFunction (ft, cs)), arg :: rest) ->
+      let arg = arg |> e ctx stack
+      match cs |> List.choose (fun (pt, bd) -> 
+                    matchPattern pt arg
+                    |> Option.map (fun bind -> (bind, bd))
+                  )
+               |> List.tryHead with
+        | Some (bind, body) ->
+          let s = List.length bind + match ft with FunNormal -> 0 | _ -> 1
+          let f = TmFunction (ft, cs) |> noinfo |> shift 0 s |> e ctx stack
+          let stack = 
+               (bind |> List.map (shift 0 s >> Some))
+             @ (match ft with FunNormal -> [] | _ -> [Some f])
+             @ stack |> List.map (Option.map (shift 0 s))
+          let mt = body |> e ctx stack |> shift 0 -s
+          TmApply (mt, rest) |> noinfo |> e ctx stack
+        | None ->
+          TmApply (
+            TmFunction (ft, cs) |> noinfo |> e ctx stack,
+            arg :: (rest |> List.map (e ctx stack))
+          ) |> noinfo
+    | TmApply _ -> tm
+
+    | TmFunction (ft, cs) ->
+      let c = match ft with FunNormal -> 0 | _ -> 1
+      TmFunction (
+        ft,
+        cs |> List.map (fun (pt, bd) ->
+                  pt,
+                  let fvc = countFvOfPattern pt + c in
+                  e ctx
+                    (List.init fvc (fun _ -> None) @ stack
+                     |> List.map (Option.map (shift 0 fvc)))
+                    bd
+              )
+      ) |> noinfo
+    
+    | TmDefer (ti, tm) -> TmDefer (ti, tm |> replace' ctx stack) |> noinfo
+
+    | TmBuiltin _ | TmRunnableBuiltin _ -> tm
+    
+let inline eval ctx tm = e ctx [] tm
+let inline eval' ctx tm = e' ctx [] tm

@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FSharp.CommandLine" Version="1.2.6720.7410" />
+    <PackageReference Include="FSharp.CommandLine" Version="2.2.6831.16169" />
     <PackageReference Include="Mono.Terminal" Version="5.4.0" />
   </ItemGroup>
 

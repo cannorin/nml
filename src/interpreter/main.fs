@@ -10,27 +10,20 @@ open System
 open System.IO
 open Mono.Terminal
 open FSharp.CommandLine
-open FSharp.CommandLine.Scanf
-open System.Reflection
 
 let editor = new LineEditor ("nml", 300)
 editor.TabAtStartCompletes <- true
 editor.HeuristicsMode <- "csharp"
 let inline scan prompt = editor.Edit(prompt, "")
 
-let tryRun ctx fn quiet input =
+let tryRun (ctx: EvalContext) fn quiet input =
   try
-    let (tls, _) = NmlParser.parseToplevelWithFileName fn input |> ParserUtils.toToplevelAndNewContext ctx ["repl"]
-    let rec e ctx runDefer t =
-      match (t |> next (ctx |> Context.termMap snd)) with
-        | Halted result -> result
-        | Reducible t ->
-          if runDefer then
-            if not quiet then cprintfn ConsoleColor.DarkGray "----> %s" (to_s t)
-            UTmDefer (e ctx true t)
-          else UTmDefer t
+    let tls =
+      NmlParser.parseToplevelWithFileName fn input 
+      |> ParserUtils.toToplevelAndNewContextEval ctx ["repl"]
+      |> fst
     let (ctx', tls') =
-      let rec evalTop ctx newtls =
+      let rec evalTop (ctx: EvalContext) newtls =
         function
           | [] -> (ctx, newtls)
           | ct :: rest ->
@@ -38,11 +31,18 @@ let tryRun ctx fn quiet input =
             let newtl =
               match ct with
                 | TopTermDef (name, (ty, tm), info) ->
-                  let tm' = e ctx false tm
+                  let tm' = eval (ctx |> Context.termMap snd) tm
                   TopTermDef (name, (ty, tm'), info)
                 | TopDo ((ty, tm), info) ->
-                  let tm' = e ctx true tm
-                  if not quiet then cprintfn ConsoleColor.DarkGray "----> %s" (to_s tm')
+                  if not quiet then
+                    cprintfn ConsoleColor.DarkGray "type: %s" (to_s ty)
+                  
+                  let tm' =
+                    eval' (ctx |> Context.termMap snd)
+                    <| With.noinfo (TmRun (TimeInf, tm))
+                  
+                  if not quiet then
+                    cprintfn ConsoleColor.DarkGray "====> %s" (to_s tm')
                   TopDo ((ty, tm'), info)
                 | TopOpen _ -> ct
                 | TopModule (name, subtops, info) ->
@@ -60,6 +60,9 @@ let tryRun ctx fn quiet input =
          |> cprintfn ConsoleColor.DarkGray "%s"
     ctx'
   with 
+    | ParserFailedWithPos (msg, src) ->
+      printfn "PARSER FAILED: (%A): %s" src msg
+      ctx
     | ParserFailed msg ->
       printfn "PARSER FAILED: %s" msg
       ctx
@@ -82,7 +85,7 @@ let listener text pos =
           function
             TermContext (name, _)
           | ModuleContext (name, _) -> Some [name]
-          | TypeContext (_, TyDataType(_, _, cstrs, _, _)) ->
+          | TypeContext (_, TyScheme (_, NotTemporal (TyDataType(_, _, { cstrs = cstrs })))) ->
             cstrs |> List.map (fun c -> c.name) |> Some
           | _ -> None
         ) 
@@ -150,14 +153,20 @@ let mainCommand =
   command {
     name "nmli"
     description "nml interpreter"
-    let! quiet = quietFlag |> CommandOptionUtils.zeroOrExactlyOne
-                           |> CommandOptionUtils.whenMissingUse false
-    let! loads = loadOption |> CommandOptionUtils.zeroOrMore
-    preprocess
+    opt quiet in
+      quietFlag |> CommandOption.zeroOrExactlyOne
+                |> CommandOption.whenMissingUse false
+    opt loads in 
+      loadOption |> CommandOption.zeroOrMore
     let! args = Command.args
 
     let initCtx =
-      loads |> List.fold (fun state fn -> tryRun state fn true (File.ReadAllText fn)) defaultContext
+      loads |> List.fold (fun state fn -> tryRun state fn true (File.ReadAllText fn)) 
+                         (defaultContext
+                          |> Context.termMap (fun tm -> 
+                              Term.getType tm |> Typer.generalizeAllFV, Term.eraseType tm
+                             )
+                         )
 
     do 
       match args with

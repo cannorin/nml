@@ -9,6 +9,8 @@ open FSharp.Collections
 open System
 open nml.Parser
 open nml.Parser.ParserUtils
+open nml.Prelude
+open With
 
 [<AutoOpen>]
 module private ParsecUtils =
@@ -24,11 +26,11 @@ module private ParsecUtils =
     sepBy1 x sep
 
   let toplevel_keywords =
-    set [ "open"; "module"; "type"; "variant"; "inductive"; "def"; "do"; "import"; ";;" ]
+    set [ "open"; "module"; "type"; "variant"; "inductive"; "coinductive"; "def"; "do"; "import"; ";;" ]
 
   let term_keywords =
-    set [ "let"; "rec"; "local"; "macro"; "in"; "fun"; 
-          "run"; "match"; "with"; "function"; "fixpoint";
+    set [ "let"; "let-next"; "rec"; "local"; "macro"; "in"; "fun"; 
+          "run"; "match"; "with"; "function"; "fixpoint"; "cofixpoint";
           "of"; "if"; "then"; "else"; "true"; "false"; "begin"; "end";
         ]
 
@@ -48,8 +50,8 @@ module private ParsecUtils =
   let name = identifier
   let qualified_name = sepBy1 name (pstring ".")
 
-  let op_chars = "+-*/<>%&|^~=!?:;".ToCharArray() |> Set.ofArray
-  let op_reserved = [ "->"; "<("; ")>"; "||"; "&&"; "|>"; ";;" ]
+  let op_chars = "+-*/<>%&|^~=!?:;@".ToCharArray() |> Set.ofArray
+  let op_reserved = [ "->"; "(@"; "@)"; "<@"; "@>"; "||"; "&&"; "|>"; ";;" ]
   let opvar = pstring "(" >>? many1Satisfy (isAnyOf op_chars) .>> pstring ")"
 
   let rawStream : Parser<CharStream<unit>, unit> =
@@ -94,11 +96,11 @@ module private ParsecUtils =
   let unitparam = syn "()" |>> List.singleton
   
   let infoConst cstr x =
-    x |> getInfo |>> withinfof cstr
+    x |> getInfo |>> (fun (a, i) -> { item = cstr a; info = SourceFile i })
 
 let ty, tyRef = createParserForwardedToRef<ParsedType, unit>()
-let term, termRef = createParserForwardedToRef<ParsedTermWithInfo, unit>()
-let toplevel, toplevelRef = createParserForwardedToRef<ParsedTopLevelWithInfo, unit>()
+let term, termRef = createParserForwardedToRef<ParsedTermWithSource, unit>()
+let toplevel, toplevelRef = createParserForwardedToRef<ParsedTopLevelWithSource, unit>()
 
 // type parser
 let _ =
@@ -136,14 +138,11 @@ let _ =
 
   let type_app, taRef = createParserForwardedToRef<ParsedType, unit>()
 
-  let type_defer = syn "<" >>. ws ty .>> syn ">" |>> PTyDefer
-
   let type_explicit = syn "(" >>. ws ty .>> syn ")" |>> PTyExplicit
  
   let not_left_recursive =
     choice [
       type_explicit;
-      type_defer;
       type_var;
     ]
 
@@ -170,7 +169,7 @@ let _ =
       op_reserved
       (fun prefix remOpChars expr1 expr2 ->
         let newInfo =
-          Option.map2 (fun x y ->
+          Source.map2 (fun x y ->
             {
               fileName = x.fileName;
               startPos = x.startPos;
@@ -227,14 +226,28 @@ let _ =
       term
     |> infoConst makeLet
 
-  let expr_letdefer =
-    tuple3
-      (syn "let!" >>? (ws name <+> (unitparam <|> sepEndBy name spaces1)) .>>? syn "=")
+  let expr_letnext =
+    tuple4
+      (syn "let-next" >>?
+            ((ws puint32 <?> "timespan" |> between "[" "]")
+         <|> (syn "" |>> fun _ -> 1u))
+        |>> TimeN)
+      (ws name .>>? syn "=")
       (term .>>? syn "in")
       term
-    |> infoConst makeLet |>> toDefer
+    |> infoConst PTmLetDefer
 
-  let expr_defer = syn "<(" >>. term .>> syn ")>" |> infoConst PTmDefer
+  let expr_letfinally =
+    tuple4
+      (syn "let-finally" |>> fun _ -> TimeInf)
+      (ws name .>>? syn "=")
+      (term .>>? syn "in")
+      term
+    |> infoConst PTmLetDefer
+
+
+  let expr_defer = syn "(@" >>. term .>> syn "@)" |> infoConst PTmDefer
+  let expr_deferInf = syn "<@" >>. term .>> syn "@>" |> infoConst PTmDeferInf
 
   let expr_if = tuple3 (syn "if" >>? term) (syn "then" >>? term) (syn "else" >>? term) |> infoConst PTmIf
 
@@ -243,17 +256,15 @@ let _ =
   let expr_match = tuple2 (syn "match" >>. term) (syn "with" >>. matchpatterns) |> infoConst PTmMatch
 
   let expr_function = 
-    (syn "function" >>? matchpatterns)
-    |> getInfo
-    |>> (fun (cases, info) -> withinfo info <| PTmFun ("x", withinfo info <| PTmMatch (withinfo info <| PTmVar ["x"], cases)))
+    (syn "function" >>? matchpatterns) |> infoConst PTmFunction
 
   let expr_fixpoint =
     tuple2
       (syn "fixpoint" >>? ws name)
       (syn "of" >>? matchpatterns)
-    |> infoConst PTmFixMatch
+    |> infoConst PTmFixpoint
 
-  let expr_apply, eaRef = createParserForwardedToRef<ParsedTermWithInfo, unit>()
+  let expr_apply, eaRef = createParserForwardedToRef<ParsedTermWithSource, unit>()
 
   let not_left_recursive = 
     choice [
@@ -263,12 +274,14 @@ let _ =
       attempt variable
       expr_tuple
       expr_list
-      expr_letdefer
+      expr_letnext
+      expr_letfinally
       attempt expr_function
       expr_fixpoint
       expr_lambda
       expr_let
       expr_defer
+      expr_deferInf
       expr_if
       expr_match
       (syn "(" >>? ws (expr_apply <|> opp.ExpressionParser) .>> syn ")")
@@ -286,7 +299,8 @@ let _ =
   do termRef :=
       choice [
         syn "begin" >>? term .>> syn "end"
-        attempt expr_letdefer
+        attempt expr_letnext
+        attempt expr_letfinally
         attempt expr_function
         attempt expr_fixpoint
         attempt expr_lambda
@@ -326,7 +340,7 @@ let implicitModule =
   
   let variantCase = 
     tuple2
-      (ws name)
+      (ws (name <|> opvar))
       ( (syn "of" >>? ty |>> Some) <|> (syn "" |>> fun _ -> None) )
   
   let toplevel_variantdef = 
@@ -335,7 +349,7 @@ let implicitModule =
               sepEndBy1 variantCase (syn "|")
            )
       |> infoConst (function
-        | (name, tprms), xs -> PTopTypeDef(PTTKVariant, name, tprms, xs)
+        | (name, tprms), xs -> PTopDataTypeDef(DTVariant, name, tprms, xs)
       )
 
   let toplevel_inductivedef = 
@@ -344,7 +358,7 @@ let implicitModule =
               sepEndBy1 variantCase (syn "|")
            )
       |> infoConst (function
-        | (name, tprms), xs -> PTopTypeDef(PTTKInductive, name, tprms, xs)
+        | (name, tprms), xs -> PTopDataTypeDef(DTInductive, name, tprms, xs)
       )
   
   let toplevel_typedef_infer = 
@@ -353,7 +367,7 @@ let implicitModule =
               sepEndBy1 variantCase (syn "|")
            )
       |> infoConst (function
-        | (name, tprms), xs -> PTopTypeDef(checkRecursiveDataType [name] xs, name, tprms, xs)
+        | (name, tprms), xs -> PTopDataTypeDef(checkRecursiveDataType [name] xs, name, tprms, xs)
       )
 
   do toplevelRef := choice [

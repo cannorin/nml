@@ -198,3 +198,6 @@ FakesAssemblies/
 .debug/
 **/*.metaproj
 nml.Testing/
+
+.vscode/
+.ionide/

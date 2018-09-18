@@ -1,6 +1,4 @@
-variant Option a = Some of a | None
 variant Either a b = Left of a | Right of b
-inductive List a = Cons of a * List a | Nil
 
 def id x = x
 def ignore _ = ()
@@ -15,10 +13,9 @@ def (>>) f g x = g (f x)
 def (<<) g f x = g (f x)
 def (?|) x d = match x with Some x -> x | None -> d
 def (;) a b = let _ = a in b
-def (!;) a b = let! _ = a in b
-def (::) x t = Cons (x, t)
+def (!;) a b = let-next _ = a in b
 
-def tryPred i = match i with Succ n -> Some n | 0 -> None
+def tryPred i = match i with S n -> Some n | 0 -> None
 def min x y = if x < y then x else y
 def max x y = if x > y then x else y
 
@@ -33,10 +30,9 @@ end
 
 module List = begin
   def append xs ys =
-    (
-	  fixpoint f of
+    (fixpoint f of
 	     [] -> ys
-       | h :: t -> h :: f t
+     | h :: t -> h :: f t
     ) xs
   
   def find cond =
@@ -52,7 +48,7 @@ module List = begin
           h :: _ -> Some h
         | [] -> None
       )
-    | Succ n ->
+    | S n ->
       function
         _ :: t -> next n t
       | [] -> None
@@ -73,7 +69,7 @@ module List = begin
   
   def sort l =
     let ins x =
-	  fixpoint f of
+      fixpoint f of
         h :: t ->
           if (x < h) then
             x :: h :: t
@@ -82,7 +78,7 @@ module List = begin
       | [] -> [x]
     in
     let f =
-	  fixpoint f of
+      fixpoint f of
         h :: t ->
           begin fun resl ->
             f t (ins h resl)
