@@ -71,6 +71,13 @@ let rec e' (ctx: Context<EracedTerm>) stack (tm: EracedTemporalTerm) : EracedTer
             | Some tm' -> tm' |> e ctx stack
             | None     -> undefined ()
 
+        | ti, Item (TmDefer (TimeN Z, tm)) ->
+          match tm.item with
+            | TmRun (ti', tm') ->
+              TmRun (ti + ti', tm') |> noinfo |> e' ctx stack
+            | TmLetRun (vn, ti', tmv, tmb) ->
+              TmLetRun (vn, ti + ti', tmv, tmb) |> noinfo |> e' ctx stack
+
         | TimeInf, Item (TmDefer (_, tm)) ->
           TmRun (TimeInf, tm |> e' ctx stack) |> noinfo |> e' ctx stack
         | TimeInf, tm -> tm
@@ -113,7 +120,7 @@ and     e  (ctx: Context<EracedTerm>) stack (tm: EracedTerm) : EracedTerm =
         TmApply (ctx |> Context.findTerm var |> Option.get, args)
         |> noinfo |> e ctx stack
     | TmApply (Item (TmBoundVar i), args) 
-      when List.length stack > i && stack.[i].IsSome ->
+      when List.length stack > i && stack.[i] |> Option.isSome ->
         TmApply (stack.[i].Value, args) |> noinfo |> e ctx stack
     | TmApply (Item (TmBuiltin (_, _, EValue f)), args) ->
       match f.Eval (args |> List.map (e ctx stack)) with

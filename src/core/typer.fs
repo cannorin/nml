@@ -10,6 +10,7 @@ type Constraint = Constraint of TemporalType * TemporalType * TypedTemporalTerm 
   override x.ToString() =
     let (Constraint (l, r, tm)) = x
     sprintf "Constraint ( %s = %s ) at %s" (to_s l) (to_s r) (to_s tm.info.source)
+
 let (|Constraint|) = function Constraint (a,b,c) -> (a,b,c)
 
 type Assign = Assign of Map<string, TemporalType>
@@ -170,18 +171,18 @@ let rec reconTemporal (ctx: Context<PolyType>)
   match term.item with
     | TmRun (ti, tm) ->
       let (tm', ty, uniq, cstr) = recon ctx stack uniq tm
-      let (tn, uniq) = genUniq uniq
-      let term' = TmRun (ti, tm') |> addTy (NTTyVar tn)
-      (term', NTTyVar tn, uniq,
-       cstr @ [Constraint (NTTyVar tn |> delayTypeBy ti, ty, term')])
+      let ty' = ty |> runTypeBy ti
+      let term' = TmRun (ti, tm') |> addTy ty'
+      (term', ty', uniq, cstr)
     
     | TmLetRun (vname, ti, tmv, tmb) ->
       let (tmv', tyv, uniq, cstrv) = recon ctx stack uniq tmv
-      let (nv, uniq) = genUniq uniq
-      let tyv' = cstrv @ [Constraint (NTTyVar nv |> delayTypeBy ti, tyv, NotTemporalTerm tmv')]
-                 |> unify
-                 |> cstrToAsgn
-                 |> substAll <| NTTyVar nv
+      let tyv' =
+        cstrv
+        |> unify
+        |> cstrToAsgn
+        |> substAll <| tyv
+        |> runTypeBy ti
       let ctx' = ctx |> Context.addTerm vname (tyv' |> generalize ctx)
       let (tmb', tyb, uniq, cstrb) = recon ctx' stack uniq tmb
       let (nb, uniq) = genUniq uniq
@@ -278,14 +279,10 @@ and recon (ctx: Context<PolyType>)
        cstr1 @ cstr2 @ [Constraint (NTTyVar r, tbody, NotTemporalTerm newTerm)])
    
     | TmDefer (time, x) ->
-      let (nv, uniq) = genUniq uniq
-      let dt = NTTyVar nv |> delayTypeBy time
       let (x', tx, uniq, cstr) = reconTemporal ctx stack uniq x
-      let (mv, uniq) = genUniq uniq
-      let newx = TmDefer (time, x') |> addTy (NTTyVar nv)
-      (newx, NTTyVar mv, uniq,
-       cstr @ Constraint (NTTyVar nv, tx, NotTemporalTerm newx)
-          :: [Constraint (NTTyVar mv, dt, NotTemporalTerm newx)])
+      let ty = tx |> delayTypeBy time
+      let newx = TmDefer (time, x') |> addTy ty
+      (newx, ty, uniq, cstr)
     
     | TmBuiltin (n, t, b)         -> 
       let t', uniq = descheme uniq t

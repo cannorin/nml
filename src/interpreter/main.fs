@@ -18,10 +18,9 @@ let inline scan prompt = editor.Edit(prompt, "")
 
 let tryRun (ctx: EvalContext) fn quiet input =
   try
-    let tls =
+    let tls, _ =
       NmlParser.parseToplevelWithFileName fn input 
       |> ParserUtils.toToplevelAndNewContextEval ctx ["repl"]
-      |> fst
     let (ctx', tls') =
       let rec evalTop (ctx: EvalContext) newtls =
         function
@@ -52,12 +51,12 @@ let tryRun (ctx: EvalContext) fn quiet input =
                   tydef
             rest |> evalTop (ctx |> Context.addToplevels [newtl] id2) (newtl :: newtls)
       evalTop ctx [] tls
-    if tls' |> List.exists (function | TopDo _ -> false | _ -> true)  then
-      printfn ""
     tls' |> List.filter (function | TopDo _ -> false | _ -> true)
          |> List.rev
          |> TopLevel<_>.print
-         |> cprintfn ConsoleColor.DarkGray "%s"
+         |> function 
+              | s when String.IsNullOrWhiteSpace s -> () 
+              | s -> cprintfn ConsoleColor.DarkGray "%s" s
     ctx'
   with 
     | ParserFailedWithPos (msg, src) ->
@@ -69,9 +68,11 @@ let tryRun (ctx: EvalContext) fn quiet input =
     | TyperFailed e ->
       Typer.printTypeError e
       ctx
+    (*
     | e -> 
       printfn "NATIVE ERROR: %s" e.Message 
       ctx
+    *)
 
 type Completion = Mono.Terminal.LineEditor.Completion
 type AutoCompleteHandler = Mono.Terminal.LineEditor.AutoCompleteHandler
