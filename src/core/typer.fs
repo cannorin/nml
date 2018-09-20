@@ -79,37 +79,48 @@ let inline descheme u (TyScheme (tvs, t)) =
 let inline deschemePrettified t = descheme 0 t |> fst
 
 type FailureReason =
-  | UnifyFailed of string option * TemporalType * TemporalType * TypedTemporalTerm
-  | UnknownVar of qualified_name * Context<PolyType>
-  | UnknownConst of qualified_name * UntypedTerm list * Context<PolyType>
-  | NotMatchable of MatchPattern * TemporalType * UntypedTerm
+  | UnifyFailed of string option * TemporalType * TemporalType
+  | UnknownVar of qualified_name
+  | UnknownConst of qualified_name * int
+  | NotMatchable of TemporalType
   | TermWithMessage of Printf.StringFormat<string -> string> * obj
   | NotRunnable of TemporalType
   | NotInductive of TemporalType
   override this.ToString() =
     match this with
-      | UnifyFailed (None, a, b, ut) ->
-        sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s\n              at %s"
-                (to_s a) (to_s b) (to_s ut) (to_s ut.info.source)
-      | UnifyFailed (Some msg, a, b, ut) ->
-        sprintf "TYPER FAILED: '%s' and '%s' are incompatible types.\n%s\n------------> %s\n              at %s"
-                (to_s a) (to_s b) msg (to_s ut) (to_s ut.info.source)
-      | UnknownVar (n, ctx) ->
-        sprintf "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
-      | UnknownConst (n, ts, ctx) ->
-        let ac = ts |> List.length
-        sprintf "TYPER FAILED: a constructor '%s' that has %i arguments does not exist." (sprint_qualified n) ac
-      | NotMatchable (l, t, r) ->
-        sprintf "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
+      | UnifyFailed (None, a, b) ->
+        sprintf "'%s' and '%s' are incompatible types." (to_s a) (to_s b)
+      | UnifyFailed (Some msg, a, b) ->
+        sprintf "'%s' and '%s' are incompatible types. %s"
+                (to_s a) (to_s b) msg
+      | UnknownVar n ->
+        sprintf "'%s' is not defined (unknown variable)." (sprint_qualified n)
+      | UnknownConst (n, ac) ->
+        sprintf "constructor '%s' that has %i arguments does not exist." (sprint_qualified n) ac
+      | NotMatchable t ->
+        sprintf "invalid match pattern for type '%s'." (to_s t)
       | NotRunnable t ->
-        sprintf "TYPER FAILED: '%s' is not runnable" (to_s t)
+        sprintf "type '%s' is not runnable" (to_s t)
       | TermWithMessage (f, t) ->
-        sprintf f (to_s t) |> sprintf "TYPER FAILED: %s"
+        sprintf f (to_s t) |> sprintf "%s"
       | NotInductive t ->
-        sprintf "TYPER FAILED: '%s' is not inductive" (to_s t)
+        sprintf "type '%s' is not inductive" (to_s t)
 
-exception TyperFailed of reason:FailureReason with
-  override this.Message = sprintf "%s" (to_s this.reason)
+type TyperFailure = {
+  reason: FailureReason
+  source: Source
+} with
+  override this.ToString() =
+    [
+      sprintf "TYPER FAILED: %s" <| to_s this.reason
+      sprintf "at %s" <| to_s this.source
+    ] |> String.concat System.Environment.NewLine
+
+exception TyperFailed of fail:TyperFailure with
+  override this.Message = sprintf "%s" (to_s this.fail)
+
+let inline failat source reason = 
+  TyperFailed { reason = reason; source = source } |> raise
 
 // Constraint list -> Constraint list
 let unify cs =
@@ -133,9 +144,9 @@ let unify cs =
               | DTInductive ->
                 rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
               | DTVariant ->
-                UnifyFailed (None, prettify' ty1, prettify' ty2, tm) |> TyperFailed |> raise
+                UnifyFailed (None, prettify' ty1, prettify' ty2) |> failat tm.info.source
               | _ ->
-                NotTemporal dt |> prettify |> NotInductive |> TyperFailed |> raise
+                NotTemporal dt |> prettify |> NotInductive |> failat tm.info.source
           | TyDataType (lname, lts, { source = lloc }), TyDataType (rname, rts, { source = rloc })
             when (lname = rname && List.length lts = List.length rts && lloc = rloc) ->
             rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
@@ -144,11 +155,11 @@ let unify cs =
             when List.last lname = List.last rname && lloc.IsFile && rloc.IsFile ->
             let msg =
               sprintf "from different locations:\n  %s\nand\n  %s" (to_s lloc.Location) (to_s rloc.Location)
-            UnifyFailed (Some msg, prettify' ty1, prettify' ty2, tm) |> TyperFailed |> raise
+            UnifyFailed (Some msg, prettify' ty1, prettify' ty2) |> failat tm.info.source
           | s, t ->
-            UnifyFailed (None, prettify' s, prettify' t, tm) |> TyperFailed |> raise
+            UnifyFailed (None, prettify' s, prettify' t) |> failat tm.info.source
       | (s, t, u) :: _ ->
-        UnifyFailed (None, prettify s, prettify t, u) |> TyperFailed |> raise
+        UnifyFailed (None, prettify s, prettify t) |> failat u.info.source
       | [] -> []
   u (cs |> List.map (function Constraint x -> x)) |> List.map Constraint
 
@@ -212,7 +223,7 @@ and recon (ctx: Context<PolyType>)
           let t', uniq = pt |> descheme uniq
           (term' t', t', uniq, [])
         | None -> 
-          UnknownVar (vn, ctx) |> TyperFailed |> raise
+          UnknownVar vn |> failat term.info
     
     | TmBoundVar i ->
       if (List.length stack > i) then
@@ -246,7 +257,7 @@ and recon (ctx: Context<PolyType>)
            NTTyVar u, uniq,
            vcstrs @ cstrs @ [Constraint (NTTyVar u, ty', NotTemporalTerm newTerm)])
         | _
-        | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
+        | None -> UnknownConst (n, List.length args) |> failat term.info
 
     | TmApply (l, rs) ->
       let (l', tl, uniq, cstr1) = recon ctx stack uniq l
@@ -292,7 +303,7 @@ and recon (ctx: Context<PolyType>)
       TmRunnableBuiltin (n, t, b) |> addTy t', t', uniq, []
 
     | TmFunction (funtype, cases) ->
-      let (argTy, uniq) = reconFromPatterns cases ctx uniq
+      let (argTy, uniq) = reconFromPatterns term.info cases ctx uniq
       let (retTy, uniq) = genUniq uniq |> Tuple.map2 NTTyVar id
       let (ty, uniq) = genUniq uniq |> Tuple.map2 NTTyVar id
       let stack =
@@ -306,7 +317,7 @@ and recon (ctx: Context<PolyType>)
                 match (ctx |> bindPattern pat argTy) with
                   | Some stack' -> 
                     (List.append stack' stack, body)
-                  | None -> NotMatchable (pat, argTy, body) |> TyperFailed |> raise
+                  | None -> NotMatchable argTy |> failat term.info
               )
             |> List.foldBack (fun (st, b) (bs', tbs, u, css) ->
                 let (b', tb, u', cs) = recon ctx st u b in
@@ -320,10 +331,10 @@ and recon (ctx: Context<PolyType>)
       let cstrs = css @ bcstr @ [Constraint (ty, TyFun (argTy, retTy) |> NotTemporal, NotTemporalTerm newfun)]
       match funtype with
         | FunNormal -> ()
-        | FunFixpoint -> verifyTermination cases' |> ignore
+        | FunFixpoint -> verifyTermination term.info cases' |> ignore
       (newfun, ty, uniq, cstrs)
 
-and verifyTermination cases =
+and verifyTermination source cases =
   let fvc p b = List.init (countFvOfPattern p) (fun _ -> b)
 
   let rec verifyTemporal dom codom = function
@@ -366,7 +377,7 @@ and verifyTermination cases =
     if res then
       res
     else
-      TermWithMessage ("Recursion is not well-founded. Bad expression: '%s'", t) |> TyperFailed |> raise
+      TermWithMessage ("Recursion is not well-founded. Bad expression: '%s'", t) |> failat source
   in
   cases |> List.forall (fun (ptn, bdy) ->
       match ptn with
@@ -374,7 +385,7 @@ and verifyTermination cases =
         | _ -> verify (fvc ptn true) [] bdy.item
     )
 
-and reconFromPatterns pats ctx uniq =
+and reconFromPatterns source pats ctx uniq =
   let (a, uniq) = genUniq uniq
   let rec gh uniq pat =
     match pat with
@@ -388,7 +399,7 @@ and reconFromPatterns pats ctx uniq =
           match findDataType ctx uniq x (Some ys) with
             | Some (TyDataType (name, targs, { cstrs = cts } & prop), uniq, ctargs) ->
               (name, targs, ctargs, { prop with cstrs = cts }, uniq)
-            | _ -> UnknownVar (x, ctx) |> TyperFailed |> raise
+            | _ -> UnknownVar x |> failat source
         let (fnq, pts) =
           ys |> List.fold (fun (u, ts) y ->
             let (nu, nt) = gh u y in (nu, nt :: ts)) (nq, [])
@@ -412,7 +423,7 @@ and reconFromPatterns pats ctx uniq =
   let cstr =
     args |> List.map (fun (t, p) -> Constraint (NTTyVar a, t, p.asTerm() |> NotTemporalTerm))
   let rt = NTTyVar a |> substAll (unify cstr |> cstrToAsgn)
-  exhaustiveCheck (pats |> List.map fst) rt ctx;
+  exhaustiveCheck source (pats |> List.map fst) rt ctx;
   (rt, uniq)
 
 and bindPattern pat t ctx =
@@ -465,7 +476,7 @@ and getInductionDepth ptns ctx =
     | _ -> Map.empty
   ptns |> List.map gett |> concat
 
-and exhaustiveCheck ptns t ctx =
+and exhaustiveCheck source ptns t ctx =
   let dmp = getInductionDepth ptns ctx
   let rec cartProd lol =
     let f n = function
@@ -522,7 +533,7 @@ and exhaustiveCheck ptns t ctx =
         xs'
       ) possiblePatterns
   if not (List.isEmpty unmatched) then
-    TermWithMessage ("The pattern match is not exhaustive.\nFor example, the value '%s' will fail.", unmatched |> List.head) |> TyperFailed |> raise
+    TermWithMessage ("The pattern match is not exhaustive.\nFor example, the value '%s' will fail.", unmatched |> List.head) |> failat source
   else
     ()
 

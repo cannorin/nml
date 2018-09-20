@@ -70,6 +70,7 @@ let builtinTerms : TermContext = [
   
   runnableBuiltin "readNat" "Unit -> Next Nat" <| function
     | ti, [TmLiteral LUnit] when ti <> TimeN Z ->
+      printf "readNat> "
       Console.ReadLine() |> uint32 |> LNat |> TmLiteral
   runnableBuiltin "print" "a -> Next Unit" <| function
     | ti, [x] when ti <> TimeN Z ->
