@@ -74,33 +74,34 @@ type TemporalTime =
               | TimeN _, TimeInf -> -1
           | _ -> invalidArg "yo" "Not a TemporalTime"
 
-type TemporalType = TyTemporal of TemporalTime * Type with
-  member inline x.time =
-    match x with TyTemporal (ti, _) -> ti
-  override x.ToString() =
-    let rec to_sc = function
-        | TyVar s -> s
-        | TyDataType (n, [], _) 
-        | TyDataTypeSelf (n, []) -> sprint_qualified n
-        | c -> sprintf "(%s)" (to_st c)
-    and to_sc_tmp = function
-        | TyTemporal (TimeN Z, t) -> to_sc t
-        | x -> sprintf "(%s)" (to_s x)
-    and to_st = function
-        | TyVar s -> s
-        | TyDataType (n, [], _) -> sprint_qualified n
-        | TyDataType (_, ts, { printer = EValue (c, f)}) -> 
-          sprintf f (ts |> List.map to_sc_tmp |> String.concat c)
-        | TyDataTypeSelf (n, []) -> sprint_qualified n
-        | TyDataType (n, ts, _)
-        | TyDataTypeSelf (n, ts) ->
-          sprintf "%s %s" (sprint_qualified n) (ts |> List.map to_sc_tmp |> String.concat " ")
-    match x with
-      | TyTemporal (TimeN Z, t) -> to_st t
-      | TyTemporal (TimeN n, t) ->
-        sprintf "Next[%i] %s" n (to_sc t)
-      | TyTemporal (TimeInf, t) ->
-        sprintf "Finally %s" (to_sc t)
+type TemporalType = TyTemporal of TemporalTime * Type
+  with
+    member inline x.time =
+      match x with TyTemporal (ti, _) -> ti
+    override x.ToString() =
+      let rec to_sc = function
+          | TyVar s -> s
+          | TyDataType (n, [], _) 
+          | TyDataTypeSelf (n, []) -> sprint_qualified n
+          | c -> sprintf "(%s)" (to_st c)
+      and to_sc_tmp = function
+          | TyTemporal (TimeN Z, t) -> to_sc t
+          | x -> sprintf "(%s)" (to_s x)
+      and to_st = function
+          | TyVar s -> s
+          | TyDataType (n, [], _) -> sprint_qualified n
+          | TyDataType (_, ts, { printer = EValue (c, f)}) -> 
+            sprintf f (ts |> List.map to_sc_tmp |> String.concat c)
+          | TyDataTypeSelf (n, []) -> sprint_qualified n
+          | TyDataType (n, ts, _)
+          | TyDataTypeSelf (n, ts) ->
+            sprintf "%s %s" (sprint_qualified n) (ts |> List.map to_sc_tmp |> String.concat " ")
+      match x with
+        | TyTemporal (TimeN Z, t) -> to_st t
+        | TyTemporal (TimeN n, t) ->
+          sprintf "Next[%i] %s" n (to_sc t)
+        | TyTemporal (TimeInf, t) ->
+          sprintf "Finally %s" (to_sc t)
 
 and PolyType = TyScheme of Set<string> * TemporalType with
   override x.ToString() =
@@ -170,13 +171,13 @@ module PrimitiveTypes =
                   cstrs = cstrs |> List.map Constructor;
                   printer = po;
                   source = Builtin 
-                })
+                }) |> NotTemporal
   let inline private genPattern ty f =
     match ty with
-      | TyDataType ([name], _, { kind = kind; cstrs = cstrs; source = Builtin }) ->
+      | NotTemporal (TyDataType ([name], _, { kind = kind; source = Builtin })) ->
         function
-          | TyDataType ([name'], ts', { kind = kind'; cstrs = cstrs'; source = Builtin })
-            when name = name' && kind = kind' && cstrs = cstrs' -> f ts'
+          | NotTemporal (TyDataType ([name'], ts', { kind = kind'; source = Builtin }))
+            when name = name' && kind = kind' -> f ts'
           | _ -> None
       | _ -> fun _ -> None
   let dummy = TyVar "dummy" |> NotTemporal
@@ -184,10 +185,6 @@ module PrimitiveTypes =
   let inline TyFun (a, b) = PrimType ("->", DTVariant, [a;b], [], EValue (" -> ", "%s"))
   let private tfd = TyFun (dummy, dummy)
   let (|TyFun|_|) = genPattern tfd (function [a;b] -> Some (a, b) | _ -> None)
-
-  let inline TyTuple ts = PrimType ("*", DTVariant, ts, [], EValue (" * ", "%s"))
-  let private ttd = TyTuple []
-  let (|TyTuple|_|) = genPattern ttd Some
 
   let TyBool = PrimType ("Bool", DTVariant, [], [("true", []); ("false", [])], ENull)
   let private tbd = TyBool
@@ -200,6 +197,14 @@ module PrimitiveTypes =
   let TyUnit = PrimType ("Unit", DTVariant, [], [], ENull)
   let private tud = TyUnit
   let (|TyUnit|_|) = genPattern tud (fun _ -> Some TyUnit)
+
+  let inline TyTuple ts =
+    if List.length ts >= 2 then
+      PrimType ("*", DTVariant, ts, [], EValue (" * ", "%s"))
+    else
+      ts |> List.head
+  let private ttd = TyTuple [TyUnit; TyUnit]
+  let (|TyTuple|_|) = genPattern ttd Some
 
   let TyList a =
     PrimType ("List", DTInductive, [a],
@@ -219,6 +224,7 @@ module PrimitiveTypes =
   let private tod = TyOption dummy
   let (|TyOption|_|) = genPattern tod (function [t] -> Some t | _ -> None)
 
+[<AutoOpen>]
 type Literal =
   | LNat of nat
   | LBool of bool
@@ -244,6 +250,14 @@ and MatchPattern =
   | MtTuple of MatchPattern list
   | MtConstruct of qualified_name * MatchPattern list
   with
+    member x.countFv() =
+      let inline cfv (m: MatchPattern) = m.countFv()
+      match x with
+        | MtBoundVar _ -> 1
+        | MtTuple xs
+        | MtConstruct (_, xs) ->
+          List.sumBy cfv xs
+        | MtWildcard | MtLiteral _ -> 0
     member x.asTerm() =
       let rec ast x =
         With.noinfo <|
@@ -288,13 +302,8 @@ and Term<'Info> =
   with
     static member tos stack uniq (x: TermWithInfo<'Info>) =
       let inline tos x = Term<'Info>.tos x
-      let rec tosc stack uniq (pt, bd) =
-        let rec countFvOfPattern = function 
-          | MtBoundVar _ -> 1
-          | MtConstruct (_, xs) ->
-            xs |> List.map countFvOfPattern |> List.sum
-          | _ -> 0
-        let (nvs, uniq) = genUniqs uniq (countFvOfPattern pt)
+      let rec tosc stack uniq (pt: MatchPattern, bd) =
+        let (nvs, uniq) = genUniqs uniq (pt.countFv())
         let stack = List.append nvs stack
         sprintf "%s -> %s" (tos stack uniq (pt.asTerm())) (tos stack uniq bd) 
       match With.itemof x with
@@ -329,7 +338,7 @@ and Term<'Info> =
         | TmDefer (TimeInf, Item x) ->
           sprintf "<@ %s @>" (TemporalTerm<'Info>.tos stack uniq x)
         | TmBuiltin (s, _, _)
-        | TmRunnableBuiltin (s, _, _) -> s
+        | TmRunnableBuiltin (s, _, _) -> sprint_qualified [s]
     override x.ToString() = Term<'Info>.tos [] 0 (With.noinfo x)
 
 and IBuiltinFunc =
@@ -402,6 +411,22 @@ type Term<'Info> with
         | TmDefer (time, x) -> TmDefer (time, TemporalTerm<_>.mapInfo(f, x))
         | TmBuiltin (x, t, b) -> TmBuiltin (x, t, b)
         | TmRunnableBuiltin (x, t, b) -> TmRunnableBuiltin (x, t, b)
+  member x.isClosed i =
+    let inline isc i (x: ^X) = (^X: (member isClosed: int -> bool) x, i)
+    match x with
+      | TmBoundVar x -> x < i
+      | TmLiteral _ -> true
+      | TmTuple xs | TmConstruct (_, xs) -> xs |> List.forall (With.itemof >> isc i)
+      | TmFunction (ft, cs) ->
+        let inline fvc (pt: MatchPattern) =
+          i + pt.countFv() +
+            match ft with
+              | FunNormal -> 0
+              | _ -> 1
+        cs |> List.forall (fun (pt, bd) -> bd |> With.itemof |> isc (fvc pt))
+      | TmDefer (_, x) -> true
+      | TmBuiltin _ | TmRunnableBuiltin _ -> true
+      | _ -> false
 
 and TemporalTerm<'Info> with
   member x.fv() =
@@ -416,6 +441,7 @@ and TemporalTerm<'Info> with
         | TmLetRun (time, s, x, y) -> TmLetRun (time, s, Term<_>.mapInfo(f, x), Term<_>.mapInfo(f, y))
 
 module Term =
+  let inline isClosed (Item x: With< ^X, _>) = (^X: (member isClosed: int -> bool) x,0)
   let inline getType (Info { ty = ty }) = ty
   let rec isStructural = function 
     | TmLiteral _ -> true

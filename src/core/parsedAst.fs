@@ -94,8 +94,8 @@ module ParserUtils =
 
   let rec toKnownType ctx : ParsedType -> TemporalType =
     function
-      | PTyVar ["Unit"] -> TyUnit |> NotTemporal
-      | PTyVar ["Bool"] -> TyBool |> NotTemporal
+      | PTyVar ["Unit"] -> TyUnit
+      | PTyVar ["Bool"] -> TyBool
       | PTyVar x ->
         match ctx |> Context.findType x |> Option.map deschemePrettified with
           | Some (NotTemporal (TyDataType (_, [], _) & vt))
@@ -111,13 +111,12 @@ module ParserUtils =
               | _ ->
                 sprintf "Unknown type '%s'" (sprint_qualified x)
                 |> tee |> ParserFailed |> raise
-      | PTyFun (a, b) -> TyFun (toKnownType ctx a, toKnownType ctx b) |> NotTemporal
+      | PTyFun (a, b) -> TyFun (toKnownType ctx a, toKnownType ctx b)
       | PTyTuple (l, r) ->
-        NotTemporal <|
-          match (r, toKnownType ctx r) with
-            | PTyTuple _, NotTemporal (TyTuple ts) ->
-              TyTuple (toKnownType ctx l :: ts)
-            | _, x -> TyTuple [toKnownType ctx l; x]
+        match (r, toKnownType ctx r) with
+          | PTyTuple _, TyTuple ts ->
+            TyTuple (toKnownType ctx l :: ts)
+          | _, x -> TyTuple [toKnownType ctx l; x]
       | PTyApp (["Next"], [x]) -> toKnownType ctx x |> delayTypeBy (TimeN 1u)
       | PTyApp (["Finally"], [x]) -> toKnownType ctx x |> delayTypeBy TimeInf
       | PTyApp (name, ts) ->
@@ -203,7 +202,14 @@ module ParserUtils =
                 | Choose p (ty, targs) ->
                   let frees =
                     [0..targs.Length-1] |> List.map (fun i -> MtBoundVar i, TmBoundVar i |> sameInfoOf ptm)
-                  TmFunction (FunNormal, [ MtTuple (frees |> List.map fst), TmConstruct (x, frees |> List.map snd) |> sameInfoOf ptm ])
+                  TmFunction (FunNormal, [
+                    (
+                      if targs.Length >= 2 then
+                        MtTuple (frees |> List.map fst)
+                      else
+                        MtBoundVar 0
+                    ),
+                    TmConstruct (x, frees |> List.map snd) |> sameInfoOf ptm ])
                 | [v] ->
                   match (stack |> List.tryFindIndex ((=) v)) with
                     | Some i -> TmBoundVar i
@@ -269,7 +275,6 @@ module ParserUtils =
                          : TopLevel<'Term> list * Context<'Term> =
     let inline (+>>) x (xs, ctx) = (x :: xs, ctx)
     let inline (@>>) xs1 (xs2, ctx) = (xs1 @ xs2, ctx)
-    let inline orEmpty x = x |> Option.defaultValue (TyTuple [] |> NotTemporal)
     let rec tot ctx moduleName ptops =
       match (ptops |> List.map itemof, ptops) with
         | toplevel :: _, toplevel_WithSource :: remaining ->
@@ -324,13 +329,15 @@ module ParserUtils =
                   | _ -> ParserFailed "coinductive datatypes are not supported" |> raise
               let cstrs' =
                 cstrs |> List.map (
-                     (fun (n, pt) -> (n, pt |> Option.map (toKnownType ctx') |> orEmpty)) 
+                     (fun (n, pt) -> (n, pt |> Option.map (toKnownType ctx')))
                   >> (fun (n, ty) ->
                           match ty with
-                            | NotTemporal (TyTuple ts) ->
+                            | Some (TyTuple ts) ->
                               { name = n; args = ts }
-                            | _ ->
-                              { name = n; args = [ty] })
+                            | Some ty ->
+                              { name = n; args = [ty] }
+                            | None ->
+                              { name = n; args = [] })
                 )
               let printer : EqualityNull<string * Printf.StringFormat<string -> string>> =
                 if is_op name then EValue (sprintf " %s " name, "%s") else ENull

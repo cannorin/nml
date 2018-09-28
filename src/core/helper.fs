@@ -22,21 +22,13 @@ let matchPattern pat t =
         ys |> List.map2 mt xs |> List.concat
       | MtWildcard, _ -> []
       | MtBoundVar x, _ -> [ x, t ]
-      | _ -> failwith "matchfailed"
+      | _ -> 
+        failwith "matchfailed"
   in 
   try
     mt pat t |> List.map snd |> Some
   with
     | _ -> None
-
-// a -> b -> c -> d --> ([a; b; c], d)
-let rec expandFun = function
-  | TyFun (a, NotTemporal (TyFun (b, c))) ->
-    let (args, ret) = TyFun (b, c) |> expandFun in
-    (a :: args, ret)
-  | TyFun (a, b) ->
-    ([a], b)
-  | x -> ([], NotTemporal x)
 
 // [a; b; c] d --> a -> b -> c -> d
 let rec foldFun builder args ret =
@@ -58,8 +50,4 @@ let inline hasTyVar vname t =
 
 let inline fvOfTerm (Item tm : With< ^T, _ >) = (^T: (member fv: unit -> Set<string>) tm)
 
-let rec countFvOfPattern = function 
-  | MtBoundVar _ -> 1
-  | MtConstruct (_, xs) ->
-    List.sumBy countFvOfPattern xs
-  | _ -> 0
+let inline countFvOfPattern (x: MatchPattern) = x.countFv()

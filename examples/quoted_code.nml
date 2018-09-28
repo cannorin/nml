@@ -4,11 +4,11 @@ let stepRun code =
   code
 in
 
-let! one = stepRun <( 1 )> in
+let-finally one = stepRun (@ 1 @) in
 
-let! three = stepRun <( one + 2 )> in
+let-finally three = stepRun (@ one + 2 @) in
 
-let! four = stepRun <( one + three )> in
+let-finally four = stepRun (@ one + three @) in
 
 one + three + four |> print !;
 one + three + four

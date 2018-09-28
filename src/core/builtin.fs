@@ -15,7 +15,7 @@ let builtinTypes : TermContext =
     "Unit", TyUnit
     "List", TyList (NTTyVar "a")
     "Option", TyOption (NTTyVar "a")
-  ] |> List.map (Tuple.map2 id (NotTemporal >> generalizeAllFV) >> TypeContext)
+  ] |> List.map (Tuple.map2 id generalizeAllFV >> TypeContext)
 
 let builtin name ty f =
   let inline f xs =
@@ -74,7 +74,7 @@ let builtinTerms : TermContext = [
       Console.ReadLine() |> uint32 |> LNat |> TmLiteral
   runnableBuiltin "print" "a -> Next Unit" <| function
     | ti, [x] when ti <> TimeN Z ->
-      printfn "print: %A" x
+      printfn "print: %s" (to_s x)
       TmLiteral LUnit
   runnableBuiltin "pause" "Unit -> Next Unit" <| function
     | ti, [TmLiteral LUnit] when ti <> TimeN Z ->

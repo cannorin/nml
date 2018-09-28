@@ -156,7 +156,10 @@ let unify cs =
             let msg =
               sprintf "from different locations:\n  %s\nand\n  %s" (to_s lloc.Location) (to_s rloc.Location)
             UnifyFailed (Some msg, prettify' ty1, prettify' ty2) |> failat tm.info.source
+          | TyDataTypeSelf (n, lts), TyDataTypeSelf (m, rts) when n = m ->
+            rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
           | s, t ->
+            printfn "%A, %A" s t
             UnifyFailed (None, prettify' s, prettify' t) |> failat tm.info.source
       | (s, t, u) :: _ ->
         UnifyFailed (None, prettify s, prettify t) |> failat u.info.source
@@ -237,7 +240,7 @@ and recon (ctx: Context<PolyType>)
     
     | TmTuple xs ->
       let (xs', txs, uniq, cstrs) = multiRecon uniq xs
-      let t = TyTuple txs |> NotTemporal
+      let t = TyTuple txs
       (TmTuple xs' |> addTy t, t, uniq, cstrs) 
     
     | TmConstruct (n, args) ->
@@ -267,13 +270,13 @@ and recon (ctx: Context<PolyType>)
       (newTerm,
        NTTyVar nv, uniq,
        cstr2 @ cstr1 @ 
-        [Constraint (tl, foldFun (TyFun >> NotTemporal) trs (NTTyVar nv), NotTemporalTerm newTerm)])
+        [Constraint (tl, foldFun (TyFun) trs (NTTyVar nv), NotTemporalTerm newTerm)])
 
     | TmLiteral l -> 
       match l with
-        | LNat _ ->  TmLiteral l |> addTy (NotTemporal TyNat),  NotTemporal TyNat, uniq, []
-        | LBool _ -> TmLiteral l |> addTy (NotTemporal TyBool), NotTemporal TyBool, uniq, []
-        | LUnit ->   TmLiteral l |> addTy (NotTemporal TyUnit), NotTemporal TyUnit, uniq, []
+        | LNat _ ->  TmLiteral l |> addTy TyNat,  TyNat, uniq, []
+        | LBool _ -> TmLiteral l |> addTy TyBool, TyBool, uniq, []
+        | LUnit ->   TmLiteral l |> addTy TyUnit, TyUnit, uniq, []
    
     | TmLet (x, value, body) ->
       let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value
@@ -317,7 +320,8 @@ and recon (ctx: Context<PolyType>)
                 match (ctx |> bindPattern pat argTy) with
                   | Some stack' -> 
                     (List.append stack' stack, body)
-                  | None -> NotMatchable argTy |> failat term.info
+                  | None ->
+                    NotMatchable argTy |> failat term.info
               )
             |> List.foldBack (fun (st, b) (bs', tbs, u, css) ->
                 let (b', tb, u', cs) = recon ctx st u b in
@@ -328,7 +332,7 @@ and recon (ctx: Context<PolyType>)
       let bcstr =
         tbs |> List.map2 (fun x t -> Constraint (retTy, t, NotTemporalTerm x)) bs'
       let newfun = TmFunction (funtype, cases') |> addTy ty
-      let cstrs = css @ bcstr @ [Constraint (ty, TyFun (argTy, retTy) |> NotTemporal, NotTemporalTerm newfun)]
+      let cstrs = css @ bcstr @ [Constraint (ty, TyFun (argTy, retTy), NotTemporalTerm newfun)]
       match funtype with
         | FunNormal -> ()
         | FunFixpoint -> verifyTermination term.info cases' |> ignore
@@ -393,7 +397,7 @@ and reconFromPatterns source pats ctx uniq =
         let (nq, ts) =
           xs |> List.fold (fun (u, ts) x ->
             let (nu, nt) = gh u x in (nu, nt :: ts)) (uniq, [])
-        (nq, TyTuple (ts |> List.rev) |> NotTemporal)
+        (nq, TyTuple (ts |> List.rev))
       | MtConstruct (x, ys) ->
         let (name, targs, ctargs, prop, nq) =
           match findDataType ctx uniq x (Some ys) with
@@ -409,9 +413,9 @@ and reconFromPatterns source pats ctx uniq =
                  |> List.choose id |> Map.ofList |> Assign 
         let vt = TyDataType (name, targs, prop) |> NotTemporal |> substAll asgn
         (fnq, vt)
-      | MtLiteral LUnit -> (uniq, NotTemporal TyUnit)
-      | MtLiteral (LNat _) -> (uniq, NotTemporal TyNat)
-      | MtLiteral (LBool _) -> (uniq, NotTemporal TyBool)
+      | MtLiteral LUnit -> (uniq, TyUnit)
+      | MtLiteral (LNat _) -> (uniq, TyNat)
+      | MtLiteral (LBool _) -> (uniq, TyBool)
       | MtWildcard
       | MtBoundVar _ ->
         let (tn, nq) = genUniq uniq
@@ -429,7 +433,7 @@ and reconFromPatterns source pats ctx uniq =
 and bindPattern pat t ctx =
   let rec bt pat t =
     match (pat, t) with
-      | MtTuple xs, NotTemporal (TyTuple ts) when (List.length xs = List.length ts) ->
+      | MtTuple xs, TyTuple ts when (List.length xs = List.length ts) ->
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat 
       | MtConstruct (n, xs), NotTemporal (TyDataTypeSelf (name, ts)) ->
         match ctx |> Context.findType name |> Option.map deschemePrettified with
@@ -441,17 +445,19 @@ and bindPattern pat t ctx =
               |> List.choose id |> Map.ofList |> Assign
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
             bt (MtConstruct (n, xs)) (TyDataType (name, ts, { prop with cstrs = cts' }) |> NotTemporal)
-          | _ -> failwith "impossible_bindPattern"
+          | _ ->
+            failwith "impossible_bindPattern"
       | MtConstruct (n, xs), NotTemporal (TyDataType (_, _, { cstrs = cts }))
         when (cts |> List.exists (fun c -> c.name = List.last n && List.length xs = List.length (c.args))) ->
         let ts = (cts |> List.find (fun c -> c.name = List.last n)).args in
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
       | MtWildcard, _
-      | MtLiteral LUnit, NotTemporal TyUnit
-      | MtLiteral (LNat _), NotTemporal TyNat
-      | MtLiteral (LBool _), NotTemporal TyBool -> []
+      | MtLiteral LUnit, TyUnit
+      | MtLiteral (LNat _), TyNat
+      | MtLiteral (LBool _), TyBool -> []
       | MtBoundVar x, t -> [ (x, t) ]
-      | _ -> failwith "bindfailed"
+      | _ ->
+        failwith "bindfailed"
   try
     bt pat t |> List.map snd |> Some
   with
@@ -492,12 +498,12 @@ and exhaustiveCheck source ptns t ctx =
       | Some i -> mp |> Map.add name (i - 1)
       | None -> mp
   let rec genReq mp = function
+    | TyTuple ts ->
+      ts |> List.map (genReq mp) |> cartProd |> List.map (TmTuple >> With.noinfo)
+    | TyUnit -> [ TmLiteral LUnit |> With.noinfo ]
+    | TyBool -> [ TmLiteral (LBool true); TmLiteral (LBool false)] |> List.map With.noinfo
     | NotTemporal t ->
       match t with
-        | TyTuple ts ->
-          ts |> List.map (genReq mp) |> cartProd |> List.map (TmTuple >> With.noinfo)
-        | TyUnit -> [ TmLiteral LUnit |> With.noinfo ]
-        | TyBool -> [ TmLiteral (LBool true); TmLiteral (LBool false)] |> List.map With.noinfo
         | TyDataType (vname, _, { cstrs = cts }) ->
           let ns = namespaceof vname
           List.collect (fun c ->

@@ -5,16 +5,13 @@ REAL_PREFIX=$(shell realpath $(PREFIX))
 DOTNET?=$(DOTNET_PATH)/dotnet
 GIT?=$(shell which git)
 
-all: release
+all: publish
 
-release: bin/Release/netcoreapp2.0/nmli.dll
-
-bin/Release/netcoreapp2.0/nmli.dll:
-	$(DOTNET) publish -c Release -o ../../bin/Release/
+release:
+	$(DOTNET) build -c Release
 
 run: release
 	$(DOTNET) run -c Release -p src/interpreter/nml.Interpreter.fsproj
-
 
 publish-windows:
 	$(DOTNET) publish -c Release --self-contained --runtime win-x64 -o ../../bin/publish/windows/
@@ -27,14 +24,11 @@ publish-osx:
 
 publish: publish-windows publish-linux publish-osx ;
 
-
-debug: bin/Debug/netcoreapp2.0/nmli.dll
-
-bin/Debug/netcoreapp2.0/nmli.dll:
+debug:
 	$(DOTNET) build -c Debug
 
 run-debug: debug
-	$(DOTNET) ./bin/Debug/netcoreapp2.0/nmli.dll
+	$(DOTNET) run -c Debug -p src/interpreter/nml.Interpreter.fsproj
 
 # Clean
 

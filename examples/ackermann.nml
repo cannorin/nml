@@ -1,15 +1,15 @@
 let ackermann = 
   fixpoint ak of
-    0 -> Succ
-  | Succ m ->
+    0 -> S
+  | S m ->
     let akk = 
       fixpoint akk of
         0 -> fun f -> f 1
-      | Succ n -> fun f -> f (akk n f)
+      | S n -> fun f -> f (akk n f)
     in
     fun x -> akk x (ak m)
 in
 
-let! x = readNat () in
-let! y = readNat () in
+let-next x = readNat () in
+let-next y = readNat () in
 ackermann x y

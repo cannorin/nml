@@ -13,7 +13,7 @@ def (>>) f g x = g (f x)
 def (<<) g f x = g (f x)
 def (?|) x d = match x with Some x -> x | None -> d
 def (;) a b = let _ = a in b
-def (!;) a b = let-next _ = a in b
+def (!;) a b = let-finally _ = a in b
 
 def tryPred i = match i with S n -> Some n | 0 -> None
 def min x y = if x < y then x else y

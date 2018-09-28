@@ -12,7 +12,7 @@ let nth =
         h :: _ -> Some h
       | [] -> None
     )
-  | Succ n ->
+  | S n ->
     function
       _ :: t -> next n t
     | [] -> None
