@@ -2,7 +2,7 @@ let gcd a b =
   let f = 
     fixpoint f of
     | 1 -> fun a b -> b
-    | Succ n ->
+    | S n ->
         begin fun a b ->
           if (a % b = n) then
             f n b n
@@ -17,7 +17,7 @@ let gcd a b =
     f a b a
 in
 
-let! x = readNat () in
-let! y = readNat () in
+let-next x = readNat () in
+let-next y = readNat () in
 gcd x y |> print
 

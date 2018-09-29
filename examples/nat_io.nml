@@ -1,4 +1,4 @@
-let! x = readNat () in
-let! y = readNat () in
+let-next x = readNat () in
+let-next y = readNat () in
 x + y |> print
 

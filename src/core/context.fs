@@ -4,20 +4,16 @@ open nml.Ast
 open nml.Helper
 open Microsoft.FSharp.Collections
 
-type Qualified<'Item> = Qualified of 'Item * string list
-
 type ContextItem<'Term> =
-  | TypeContext of string * Type
+  | TypeContext of string * PolyType
   | ModuleContext of string * ContextItem<'Term> list
   | TermContext of string * 'Term
 
 type Context<'Term> = ContextItem<'Term> list
 
-type InferredTermContext = Context<UntypedTerm * Type>
-
-type TyperContext = Context<Type>
-
-type EvalContext = Context<UntypedTerm>
+type TermContext = Context<TypedTerm>
+type TypeContext = Context<PolyType>
+type EvalContext = Context<PolyType * EracedTerm>
 
 module Context =
   open System
@@ -55,7 +51,8 @@ module Context =
     tryFindRec (fun name -> 
       function
         | TypeContext (n, ty) when n = name -> Some ty
-        | TypeContext (_, TyDataType(n, _, _, _, _)) & TypeContext (_, ty) when n = qualifiedName -> Some ty
+        | TypeContext (_, TySchemeNotTemporal (_, TyDataType(n, _, _))) & TypeContext (_, ty)
+          when n = qualifiedName -> Some ty
         | _ -> None
     ) qualifiedName ctx
 
@@ -63,9 +60,9 @@ module Context =
     let aLen = args |> Option.map List.length
     tryFindRec (fun name ->
                   function
-                    | TypeContext (_, TyDataType (vs, targs, ts, p, info)) ->
+                    | TypeContext (_, TySchemeNotTemporal (_, TyDataType (_, _, { cstrs = ts }))) & TypeContext (_, t) ->
                       ts |> List.tryFind (fun c -> c.name = name && aLen |> Option.map ((=) (List.length c.args)) ?| true)
-                         |> Option.map (fun c -> (TyDataType (vs, targs, ts, p, info), c.args))
+                         |> Option.map (fun _ -> (t, name))
                     | _ -> None
 
                ) qualifiedName ctx
@@ -126,19 +123,19 @@ module Context =
 
   let addToplevels toplevels evaluator ctx =
     at toplevels ctx ctx evaluator
-
+  
   let toTyperMap ctx =
     ctx
       |> List.choose (function | TermContext (n, t) -> Some (n, t) | _ -> None)
       |> List.rev |> Map.ofList |> Map.toList
-  
+ 
   let print ctx = 
     let rec p idt cs = [
         for c in cs do
           yield!
             match c with
               | TypeContext (name, ty) -> [ sprintf "type %s = %s" (handle_op name) (to_s ty) |> indent idt ]
-              | TermContext (name, (ty, _)) -> [ sprintf "let %s : %s"  (handle_op name) (to_s ty) |> indent idt ]
+              | TermContext (name, Item { ty = ty }) -> [ sprintf "let %s : %s"  (handle_op name) (to_s ty) |> indent idt ]
               | ModuleContext (name, cs') ->
                 (sprintf "module %s =" name |> indent idt) :: p (idt + 2) cs'
       ]

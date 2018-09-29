@@ -4,605 +4,557 @@ open nml.Ast
 open nml.Helper
 open nml.Contexts
 open Microsoft.FSharp.Collections
+open nml.Prelude
 
-type Constraint = Constraint of Type * Type * UntypedTerm
-let cstr_Extract = function
-  | Constraint (s, t, u) -> (s, t, u)
+type Constraint = Constraint of TemporalType * TemporalType * TypedTemporalTerm with
+  override x.ToString() =
+    let (Constraint (l, r, tm)) = x
+    sprintf "Constraint ( %s = %s ) at %s" (to_s l) (to_s r) (to_s tm.info.source)
 
-type Assign = Assign of Map<string, Type>
-let asgn_Extract = function
-  | Assign x -> x
+let (|Constraint|) = function Constraint (a,b,c) -> (a,b,c)
 
-let cstr_toAsgn cstr =
-  match cstr with
-    | xs -> xs |> List.choose (function | Constraint (TyVar name, t, _) -> Some (name, t) | _ -> None ) |> Map.ofList |> Assign
+type Assign = Assign of Map<string, TemporalType>
 
-// tx |> substIn "x" t
+let inline NTTyVar nm = NotTemporal (TyVar nm)
+let (|NTTyVar|_|) = function NotTemporal (TyVar name) -> Some name | _ -> None
+
+let cstrToAsgn xs =
+  xs |> List.choose (function | Constraint (NTTyVar name, t, _) -> Some (name, t) | _ -> None )
+     |> Map.ofList
+     |> Assign
+
+// t |> subst "x" tx
 // --> t [x <- tx]
-let substIn vname tsbj tvl =
-  let rec sub = function
-    | TyFun (a, b) -> TyFun (sub a, sub b)
-    | TyVar nm when (nm = vname) -> tvl
-    | TyDeferred t -> TyDeferred (sub t)
-    | TyDataType (n, ts, cts, p, info) ->
-      TyDataType (n, ts |> List.map sub, cts |> List.map (argsmap sub), p, info)
-    | TyDataTypeSelf (n, ts) -> TyDataTypeSelf (n, ts |> List.map sub)
-    | TyScheme (tvs, t) -> TyScheme (tvs, sub t)
-    | x -> x
-  in sub tsbj
+let rec subst vname tvl = function
+  | TyVar nm -> if nm = vname then tvl else TyVar nm |> NotTemporal
+  | TyDataType (n, ts, prop) ->
+    NotTemporal <| 
+      TyDataType (
+        n,
+        ts |> List.map (substTemporal vname tvl),
+        { prop with cstrs = prop.cstrs |> List.map (argsmap (substTemporal vname tvl)) })
+  | TyDataTypeSelf (n, ts) ->
+    NotTemporal <| TyDataTypeSelf (n, ts |> List.map (substTemporal vname tvl))
+and substTemporal vname tvl (TyTemporal (ti, ty)) =
+  let (TyTemporal (ti', ty')) = subst vname tvl ty
+  TyTemporal (ti + ti', ty')
 
 // Assign -> Type -> Type
-let substAll ss tsbj =
-  ss
-    |> asgn_Extract
-    |> Map.fold (fun ts name tnsbj -> tnsbj |> substIn name ts) tsbj 
+let substAll (Assign ss) tsbj =
+  ss |> Map.fold (fun ts name tnsbj -> ts |> substTemporal name tnsbj) tsbj 
 
 // TyId -> Type -> Constraint list -> Constraint list
 let substInConstraints vname tvl cs =
-  cs |> List.map (fun (Constraint (ta, tb, u)) -> Constraint (tvl |> substIn vname ta, tvl |> substIn vname tb, u))
+  cs |> List.map (fun (Constraint (ta, tb, u)) ->
+    Constraint (ta |> substTemporal vname tvl, tb |> substTemporal vname tvl, u))
 
-let substAllInConstraints asgn cs =
-  asgn
-    |> asgn_Extract
-    |> Map.fold (fun c name t -> c |> substInConstraints name t) cs
-
-let rec removeForall = function
-  | TyScheme (_, t) -> removeForall t
-  | t -> t
-
-let prettify uniq ts =
-  let rec getTyNames = function
-    | TyVar n -> set [n]
-    | TyFun (a, b) -> Set.union (getTyNames a) (getTyNames b)
-    | TyDeferred t -> getTyNames t
-    | TyDataType (_, ts, _, _, _)
-    | TyDataTypeSelf (_, ts) -> ts |> List.map getTyNames |> List.fold Set.union (set [])
-    | TyScheme (vs, t) -> getTyNames t |> Set.union vs
-    | _ -> set []
-  in
-  let (fvs, ts) =
-    let f t =
-      let fv = getTyNames t in
-      let t =
-        if (Set.count fv > 0) then
-          TyScheme (fv, t)
-        else
-          t
-      in (fv, t)
-    in
-    ts |> List.map f
-       |> List.fold (fun (fvs, ts) (fv, t) -> (Set.union fvs fv, t :: ts)) (Set.empty, [])
-       |> (fun (x, y) -> (x, List.rev y))
-  in
-  let rec rename m = function
-    | TyScheme (vs, t) ->
-      TyScheme (vs |> Set.map (fun x -> m |> Map.tryFind x ?| x), rename m t) 
-    | x -> x |> substAll (m |> Map.map (fun _ v -> TyVar v) |> Assign)
-  let ftmap = fvs |> Set.map (fun x -> (x, x + "+")) |> Set.toList |> Map.ofList in
-  let ts' = ts |> List.map (rename ftmap) in
-  let (us, uniq) = fvs |> Set.count |> genUniqs uniq in
-  let newmap = fvs |> Set.toList |> List.map2 (fun y x -> (x + "+", y)) us |> Map.ofList in
-  (ts' |> List.map (rename newmap), uniq)
-
-
-let prettify1 a =
-  match (prettify 0 [a]) with
-    | ([a'], _) -> a'
-    | _ -> failwith "impossible_prettify1"
-
-let prettify2 (a, b) =
-  match (prettify 0 [a; b]) with
-    | ([a'; b'], _) -> (a', b')
-    | _ -> failwith "impossible_prettify2"
+let substAllInConstraints (Assign asgn) cs =
+  asgn |> Map.fold (fun c name t -> c |> substInConstraints name t) cs
 
 let rename u vs f t =
-  let (nvs, u') = vs |> List.length |> genUniqs u in
-  let qvs = vs |> List.map ((+) "_rename") in
+  let (nvs, u') = vs |> List.length |> genUniqs u
+  let qvs = vs |> List.map ((+) "_rename")
   let genasgn xs ys =
-    List.map2 (fun x y -> (x, TyVar y)) xs ys |> Map.ofList |> Assign
-  in
+    List.map2 (fun x y -> (x, NTTyVar y)) xs ys |> Map.ofList |> Assign
   (t |> f (substAll (genasgn vs qvs)) |> f (substAll (genasgn qvs nvs)), u')
 
+let inline prettify t =
+  t |> rename 0 (fvOf t |> Set.toList) id |> fst
+
+let inline prettify' t = NotTemporal t |> prettify
+
+let generalize (ctx: Context<PolyType>) ty =
+  let fvs = 
+    List.collect (fun (_, t) -> fvOf t |> Set.toList) (ctx |> Context.toTyperMap)
+  let tvars = 
+    ty |> fvOf
+       |> Set.filter (fun y -> fvs |> List.contains y |> not)
+  TyScheme (tvars, ty)
+
+let generalizeAllFV ty = TyScheme (fvOf ty, ty)
+
+let inline descheme u (TyScheme (tvs, t)) =
+  t |> rename u (Set.toList tvs) id
+
+let inline deschemePrettified t = descheme 0 t |> fst
 
 type FailureReason =
-  | UnifyFailed of Type * Type * UntypedTerm
-  | UnifyFailedWithMessage of string * Type * Type * UntypedTerm
-  | UnknownVar of qualified_name * Context<Type>
-  | UnknownConst of qualified_name * UntypedTerm list * Context<Type>
-  | NotMatchable of UntypedTerm * Type * UntypedTerm
-  | TermWithMessage of Printf.StringFormat<string -> string> * UntypedTerm
-  | NotRunnable of Type
-  | NotInductive of Type
+  | UnifyFailed of string option * TemporalType * TemporalType
+  | UnknownVar of qualified_name
+  | UnknownConst of qualified_name * int
+  | NotMatchable of TemporalType
+  | TermWithMessage of Printf.StringFormat<string -> string> * obj
+  | NotRunnable of TemporalType
+  | NotInductive of TemporalType
+  override this.ToString() =
+    match this with
+      | UnifyFailed (None, a, b) ->
+        sprintf "'%s' and '%s' are incompatible types." (to_s a) (to_s b)
+      | UnifyFailed (Some msg, a, b) ->
+        sprintf "'%s' and '%s' are incompatible types. %s"
+                (to_s a) (to_s b) msg
+      | UnknownVar n ->
+        sprintf "'%s' is not defined (unknown variable)." (sprint_qualified n)
+      | UnknownConst (n, ac) ->
+        sprintf "constructor '%s' that has %i arguments does not exist." (sprint_qualified n) ac
+      | NotMatchable t ->
+        sprintf "invalid match pattern for type '%s'." (to_s t)
+      | NotRunnable t ->
+        sprintf "type '%s' is not runnable" (to_s t)
+      | TermWithMessage (f, t) ->
+        sprintf f (to_s t) |> sprintf "%s"
+      | NotInductive t ->
+        sprintf "type '%s' is not inductive" (to_s t)
 
-exception TyperFailed of FailureReason
+type TyperFailure = {
+  reason: FailureReason
+  source: Source
+} with
+  override this.ToString() =
+    [
+      sprintf "TYPER FAILED: %s" <| to_s this.reason
+      sprintf "at %s" <| to_s this.source
+    ] |> String.concat System.Environment.NewLine
+
+exception TyperFailed of fail:TyperFailure with
+  override this.Message = sprintf "%s" (to_s this.fail)
+
+let inline failat source reason = 
+  TyperFailed { reason = reason; source = source } |> raise
 
 // Constraint list -> Constraint list
 let unify cs =
-  let cstrmap f xs =
-    xs |> List.map Constraint |> f |> List.map cstr_Extract
-  in
-  let rec u cs' = 
+  let inline cstrmap f xs =
+    xs |> List.map Constraint |> f |> List.map (function Constraint x -> x)
+  let rec u cs' =
     match cs' with
       | (s, t, _) :: rest when (s = t) -> u rest
-      | (s, TyVar tn, x) :: rest
-      | (TyVar tn, s, x) :: rest when (s |> hasTyVar tn |> not) ->
-        List.append (cs' |> cstrmap (substInConstraints tn s) |> u) [ (TyVar tn, s, x) ]
-      | ((TyDataType (n, lts, lcts, _, _), TyDataTypeSelf (m, rts), _) :: _ & (dt, dts, t) :: rest) 
-      | ((TyDataTypeSelf (m, rts), TyDataType (n, lts, lcts, _, _), _) :: _ & (dts, dt, t) :: rest) when (n = m && List.length lts = List.length rts) ->
-        match (dt |> isInductive) with
-          | Some true -> rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-          | Some false ->
-            let (l, r) = prettify2 (dt, dts) in
-            UnifyFailed (l, r, t) |> TyperFailed |> raise
-          | None -> dt |> prettify1 |> NotInductive |> TyperFailed |> raise
-      | (TyFun (a1, b1), TyFun (a2, b2), f) :: rest ->
-        u ((a1, a2, f) :: (b1, b2, f) :: rest)
-      | (TyDeferred a, TyDeferred b, d) :: rest ->
-        u ((a, b, d) :: rest)
-      | (TyDataType (lname, lts, _, _, lloc), TyDataType (rname, rts, _, _, rloc), t) :: rest
-        when (lname = rname && List.length lts = List.length rts && lloc = rloc) ->
-        rest |> List.append (List.map2 (fun x y -> (x, y, t)) lts rts) |> u
-
-      | (s, t, u) :: _ & (TyDataType (lname, _, _, _, lloc), TyDataType (rname, _, _, _, rloc), _) :: _ 
-        when List.last lname = List.last rname && lloc.IsSome && rloc.IsSome ->
-        let (s', t') = prettify2 (s, t) in
-        let msg =
-          sprintf "from different locations:\n  %s\nand\n  %s" (to_s lloc.Value) (to_s rloc.Value)
-        UnifyFailedWithMessage (msg, removeForall s', removeForall t', u) |> TyperFailed |> raise
-      | (s, t, u) :: rest ->
-        let (s', t') = prettify2 (s, t) in
-        UnifyFailed (removeForall s', removeForall t', u) |> TyperFailed |> raise
+      | (TyTemporal (ti1, TyVar tn), TyTemporal (ti2, s), x) :: _
+      | (TyTemporal (ti2, s), TyTemporal (ti1, TyVar tn), x) :: _
+        when NotTemporal s |> hasTyVar tn |> not && ti1 <= ti2 ->
+        let s' = TyTemporal (ti2 - ti1, s)
+        List.append (cs' |> cstrmap (substInConstraints tn s') |> u)
+                    [ (NTTyVar tn, s', x) ]
+      | (TyTemporal (ti1, ty1), TyTemporal (ti2, ty2), tm) :: rest when ti1 = ti2 ->
+        match ty1, ty2 with
+          | TyDataType (n, lts, { kind = kind }) & dt, TyDataTypeSelf (m, rts)
+          | TyDataTypeSelf (m, rts), TyDataType (n, lts, { kind = kind }) & dt
+            when (n = m && List.length lts = List.length rts) ->
+            match kind with
+              | DTInductive ->
+                rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
+              | DTVariant ->
+                UnifyFailed (None, prettify' ty1, prettify' ty2) |> failat tm.info.source
+              | _ ->
+                NotTemporal dt |> prettify |> NotInductive |> failat tm.info.source
+          | TyDataType (lname, lts, { source = lloc }), TyDataType (rname, rts, { source = rloc })
+            when (lname = rname && List.length lts = List.length rts && lloc = rloc) ->
+            rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
+          | TyDataType (lname, _, { source = lloc }), 
+            TyDataType (rname, _, { source = rloc })
+            when List.last lname = List.last rname && lloc.IsFile && rloc.IsFile ->
+            let msg =
+              sprintf "from different locations:\n  %s\nand\n  %s" (to_s lloc.Location) (to_s rloc.Location)
+            UnifyFailed (Some msg, prettify' ty1, prettify' ty2) |> failat tm.info.source
+          | TyDataTypeSelf (n, lts), TyDataTypeSelf (m, rts) when n = m ->
+            rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
+          | s, t ->
+            printfn "%A, %A" s t
+            UnifyFailed (None, prettify' s, prettify' t) |> failat tm.info.source
+      | (s, t, u) :: _ ->
+        UnifyFailed (None, prettify s, prettify t) |> failat u.info.source
       | [] -> []
-  in u (cs |> List.map cstr_Extract) |> List.map Constraint
+  u (cs |> List.map (function Constraint x -> x)) |> List.map Constraint
 
-// Context -> Type list -> UniqId -> Term -> (Term * Type * UniqId * Constraint list)
-let rec recon ctx stack uniq term =
-  let multiRecon uq terms =
-    let folder (xs, ts, u, cs) x =
-      let (x', t', u', cs') = recon ctx stack u x in
-      (x' :: xs, t' :: ts, u', List.append cs' cs)
-    in
-    let (terms', types', uniq', cstrs') = terms |> List.fold folder ([], [], uq, []) in
-    (terms' |> List.rev, types' |> List.rev, uniq', cstrs' |> List.rev)
-  in
-  match term with
-    | UTmFreeVar vn ->
-      match (ctx |> Context.findTerm vn) with
-        | Some (TyScheme (vs, t)) ->
-          let (t',uniq) = t |> rename uniq (vs |> Set.toList) id in
-          (term, t', uniq, [])
-        | Some t -> (term, t, uniq, [])
-        | None -> 
-          match (ctx |> Context.findConstructor vn None) with
-            // constructor as a function
-            | Some (TyDataType (name, targs, cts, p, info), ctargs) ->
-              let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
-              let ((targs', cts', ctargs'), uniq) = (targs, cts, ctargs) |> rename uniq tprms (fun f (x, y, z) -> (x |> List.map f, y |> List.map (argsmap f), z |> List.map f)) in
-              let (argt, isone) = 
-                if (ctargs' |> List.length = 1) then
-                  (ctargs'.[0], true)
-                else
-                  (TyTuple ctargs', false)
-              in
-              let typ = (TyFun (argt, TyDataType (name, targs', cts', p, info))) in
-              let con = ExternalFun (sprint_qualified vn) typ (function
-                  | x :: _ when isone -> UTmConstruct (vn, [x])
-                  | UTmConstruct (["*"], xs) :: _ -> UTmConstruct (vn, xs)
-                  | _ -> failwith "impossible_recon_UVar_variantfun"
-                )
-              in
-              (con, typ, uniq, [])
-            | Some _
-            | None -> UnknownVar (vn, ctx) |> TyperFailed |> raise
+let inline findDataType ctx uniq n args =
+  ctx |> Context.findConstructor n args
+      |> Option.map (Tuple.map2 (descheme uniq) id)
+      |> Option.bind (function
+        | (NotTemporal (TyDataType (_, _, prop) & t), uniq), name ->
+          let cstr = prop.cstrs |> List.find (fun c -> c.name = name)
+          Some (t, uniq, cstr.args)
+        | _ -> None
+      ) 
+
+let rec reconTemporal (ctx: Context<PolyType>)
+                      (stack: TemporalType list)
+                      uniq
+                      (term: UntypedTemporalTerm) 
+                      : (TypedTemporalTerm * TemporalType * int * Constraint list) =
+  let inline addTy t x = Term.addType term t x
+  match term.item with
+    | TmRun (ti, tm) ->
+      let (tm', ty, uniq, cstr) = recon ctx stack uniq tm
+      let ty' = ty |> runTypeBy ti
+      let term' = TmRun (ti, tm') |> addTy ty'
+      (term', ty', uniq, cstr)
     
-    | UTmBoundVar i ->
+    | TmLetRun (vname, ti, tmv, tmb) ->
+      let (tmv', tyv, uniq, cstrv) = recon ctx stack uniq tmv
+      let tyv' =
+        cstrv
+        |> unify
+        |> cstrToAsgn
+        |> substAll <| tyv
+        |> runTypeBy ti
+      let ctx' = ctx |> Context.addTerm vname (tyv' |> generalize ctx)
+      let (tmb', tyb, uniq, cstrb) = recon ctx' stack uniq tmb
+      let (nb, uniq) = genUniq uniq
+      let term' = TmLetRun (vname, ti, tmv', tmb') |> addTy (NTTyVar nb)
+      (term', NTTyVar nb, uniq, 
+       cstrb @ [Constraint (NTTyVar nb, tyb, term')])
+
+and recon (ctx: Context<PolyType>)
+          (stack: TemporalType list)
+          uniq
+          (term: UntypedTerm) 
+          : (TypedTerm * TemporalType * int * Constraint list) =
+  let inline addTy t x = Term.addType term t x
+  
+  let multiRecon uq terms =
+    let inline folder (xs, ts, u, cs) x =
+      let (x', t', u', cs') = recon ctx stack u x
+      (x' :: xs, t' :: ts, u', List.append cs' cs)
+    let (terms', types', uniq', cstrs') = terms |> List.fold folder ([], [], uq, [])
+    (terms' |> List.rev, types' |> List.rev, uniq', cstrs' |> List.rev)
+
+  match term.item with
+    | TmFreeVar vn ->
+      let term' t = TmFreeVar vn |> addTy t
+      match ctx |> Context.findTerm vn with
+        | Some pt ->
+          let t', uniq = pt |> descheme uniq
+          (term' t', t', uniq, [])
+        | None -> 
+          UnknownVar vn |> failat term.info
+    
+    | TmBoundVar i ->
       if (List.length stack > i) then
-        (UTmBoundVar i, stack |> List.item i, uniq, [])
+        let t = stack |> List.item i
+        (TmBoundVar i |> addTy t, t, uniq, [])
       else
         failwith "impossible_UBoundVar"
-
-    | UTmFun body ->
-      let (u, uniq) = genUniq uniq in
-      let (body', t, uniq, cstr) = recon ctx ((TyVar u) :: stack) uniq body in
-      let (v, uniq) = genUniq uniq in
-      (UTmFun body', TyVar v, uniq, cstr @ Constraint (TyVar v, TyFun (TyVar u, t), UTmFun body') :: [])
-
-    | UTmConstruct (n, args) ->
-      match (ctx |> Context.findConstructor n (Some args)) with
-        | Some (TyDataType (name, vtargs, cts, p, info), _) ->
-          let vtprms = vtargs |> List.choose (function | TyVar x -> Some x | _ -> None) in
-          let ((vtargs', cts'), uniq) = (vtargs, cts) |> rename uniq vtprms (fun f (x, y) -> (x |> List.map f, y |> List.map (argsmap f))) in
+    
+    | TmTuple [x] ->
+      recon ctx stack uniq x
+    
+    | TmTuple xs ->
+      let (xs', txs, uniq, cstrs) = multiRecon uniq xs
+      let t = TyTuple txs
+      (TmTuple xs' |> addTy t, t, uniq, cstrs) 
+    
+    | TmConstruct (n, args) ->
+      match findDataType ctx uniq n (Some args) with
+        | Some (TyDataType (name, vtargs, { cstrs = cts } & prop), uniq, _) ->
           let ctargs =
-            (cts' |> List.find (fun c -> c.name = List.last n)).args
-          in
-          let (args', targs, uniq, cstrs) = multiRecon uniq args in
+            (cts |> List.find (fun c -> c.name = List.last n)).args
+          let (args', targs, uniq, cstrs) = multiRecon uniq args
           let vcstrs =
             targs
               |> List.map2 (fun x y -> (x, y)) ctargs
-              |> List.map2 (fun x (y, z) -> Constraint (y, z, x)) args'
-          in
-          let (u, uniq) = genUniq uniq in
-          (UTmConstruct (n, args'), TyVar u, uniq, vcstrs @ cstrs @ Constraint (TyVar u, TyDataType (name, vtargs', cts', p, info), UTmConstruct (n, args')) :: [])
+              |> List.map2 (fun x (y, z) -> Constraint (y, z, NotTemporalTerm x)) args'
+          let (u, uniq) = genUniq uniq
+          let newTerm = TmConstruct (n, args') |> addTy (NTTyVar u)
+          let ty' = TyDataType (name, vtargs, { prop with cstrs = cts }) |> NotTemporal
+          (newTerm,
+           NTTyVar u, uniq,
+           vcstrs @ cstrs @ [Constraint (NTTyVar u, ty', NotTemporalTerm newTerm)])
         | _
-        | None -> UnknownConst (n, args, ctx) |> TyperFailed |> raise
-    
-    | UTmTuple [x] ->
-      recon ctx stack uniq x
-    
-    | UTmTuple xs ->
-      let (xs', txs, uniq, cstrs) = multiRecon uniq xs in
-      (UTmTuple xs', TyTuple txs, uniq, cstrs) 
+        | None -> UnknownConst (n, List.length args) |> failat term.info
 
-    | UTmApply (l, rs) ->
-      let (l', tl, uniq, cstr1) = recon ctx stack uniq l in
-      let (rs', trs, uniq, cstr2) = multiRecon uniq rs in
-      let (nv, uniq) = genUniq uniq in
-      (UTmApply (l', rs'), TyVar nv, uniq, cstr2 @ cstr1 @ Constraint (tl, foldFun TyFun trs (TyVar nv), UTmApply (l', rs')) :: [])
+    | TmApply (l, rs) ->
+      let (l', tl, uniq, cstr1) = recon ctx stack uniq l
+      let (rs', trs, uniq, cstr2) = multiRecon uniq rs
+      let (nv, uniq) = genUniq uniq
+      let newTerm = TmApply (l', rs') |> addTy (NTTyVar nv)
+      (newTerm,
+       NTTyVar nv, uniq,
+       cstr2 @ cstr1 @ 
+        [Constraint (tl, foldFun (TyFun) trs (NTTyVar nv), NotTemporalTerm newTerm)])
 
-    | UTmLiteral l -> 
+    | TmLiteral l -> 
       match l with
-        | LNat _ -> (term, TyNat, uniq, [])
-        | LBool _ -> (term, TyBool, uniq, [])
-        | LUnit -> (term, TyUnit, uniq, [])
+        | LNat _ ->  TmLiteral l |> addTy TyNat,  TyNat, uniq, []
+        | LBool _ -> TmLiteral l |> addTy TyBool, TyBool, uniq, []
+        | LUnit ->   TmLiteral l |> addTy TyUnit, TyUnit, uniq, []
    
-    | UTmLet (x, value, body) ->
-      let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value in
-      let cstr1' = unify cstr1 in
-      let tvalue' = tvalue |> substAll (cstr_toAsgn cstr1') in
-      let fvs = 
-        ctx |> Context.toTyperMap
-            |> List.map (fun (_, t) -> fvOf t |> Set.toList)
-            |> List.concat
-      in
-      let tvars = 
-        tvalue' |> fvOf
-                |> Set.toList
-                |> List.filter (fun y -> fvs |> List.contains y |> not)
-      in
-      let tx = if (List.length tvars > 0) then TyScheme (tvars |> Set.ofList, tvalue') else tvalue' in
-      let ctx' = ctx |> Context.addTerm x tx in
-      let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body in
+    | TmLet (x, value, body) ->
+      let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value
+      let cstr1' = unify cstr1
+      let tvalue' = tvalue |> substAll (cstrToAsgn cstr1')
+      let tx = generalize ctx tvalue'
+      let ctx' = ctx |> Context.addTerm x tx
+      let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body
 
-      let tbody' = tbody |> substAll (cstr1 @ cstr2 |> unify |> cstr_toAsgn) in
-
-      let (r, uniq) = genUniq uniq in
-      (UTmLet (x, value', body'), TyVar r, uniq, cstr1 @ cstr2 @ Constraint (TyVar r, tbody, UTmLet (x, value', body')) :: [])
+      let (r, uniq) = genUniq uniq
+      let newTerm = TmLet (x, value', body') |> addTy (NTTyVar r)
+      (newTerm, 
+       NTTyVar r, uniq, 
+       cstr1 @ cstr2 @ [Constraint (NTTyVar r, tbody, NotTemporalTerm newTerm)])
    
-    | UTmLetDefer (x, value, body) ->
-      let (nv, uniq) = genUniq uniq in
-      let (value', tvalue, uniq, cstr) = recon ctx stack uniq value in
-      let (mv, uniq) = genUniq uniq in
-      let cstr' = cstr @ Constraint (TyDeferred (TyVar nv), tvalue, value') :: Constraint (TyVar mv, TyDeferred (TyVar nv), value') :: [] in
-      let (lv, uniq) = genUniq uniq in
-      let (body', tbody, uniq, cstr2) = recon (ctx |> Context.addTerm x (TyVar lv)) stack uniq body in
-      let cstr2' = cstr2 @ cstr' in
-      let (tvalue', timevalue) = (TyVar mv) |> substAll (cstr2' |> unify |> cstr_toAsgn) |> getTimeOfType  in
-      UTmLet (x, value' |> times timevalue UTmRun, body) |> times timevalue UTmDefer |> recon ctx stack uniq
-
-    | UTmDefer x ->
-      let (nv, uniq) = genUniq uniq in
-      let dt = TyDeferred (TyVar nv) in
-      let (x', tx, uniq, cstr) = recon ctx stack uniq x in
-      let (mv, uniq) = genUniq uniq in
-      (UTmDefer x', TyVar mv, uniq, cstr @ Constraint (TyVar nv, tx, UTmDefer x') :: Constraint (TyVar mv, dt, UTmDefer x') :: [])
+    | TmDefer (time, x) ->
+      let (x', tx, uniq, cstr) = reconTemporal ctx stack uniq x
+      let ty = tx |> delayTypeBy time
+      let newx = TmDefer (time, x') |> addTy ty
+      (newx, ty, uniq, cstr)
     
-    | UTmRun x ->
-      let (nv, uniq) = genUniq uniq in
-      let dt = TyDeferred (TyVar nv) in
-      let (x', tx, uniq, cstr) = x |> recon ctx stack uniq in
-      let (mv, uniq) = genUniq uniq in
-      (UTmRun x', TyVar mv, uniq, cstr @ Constraint (dt, tx, UTmRun x) :: Constraint (TyVar mv, TyVar nv, UTmRun x') :: [])
+    | TmBuiltin (n, t, b)         -> 
+      let t', uniq = descheme uniq t
+      TmBuiltin (n, t, b) |> addTy t', t', uniq, []
+    | TmRunnableBuiltin (n, t, b) ->
+      let t', uniq = descheme uniq t
+      TmRunnableBuiltin (n, t, b) |> addTy t', t', uniq, []
 
-    | UTmExternal (_, t) ->
-      (term, t, uniq, [])
-
-    | UTmMatch (v, cases) ->
-      let (v', tv, uniq, cstr) = recon ctx stack uniq v in
-      let rec expandCases = function
-        | UTmApply (UTmFreeVar ["::"], [l; r]) -> UTmConstruct (["Cons"], [expandCases l; expandCases r])
-        | UTmLiteral (LNat 0u) -> UTmConstruct (["0"], [])
-        | UTmTuple xs -> UTmTuple (xs |> List.map expandCases)
-        | x -> x
-      in
-      let cases = cases |> List.map (fun (ptn, body) -> (expandCases ptn, body)) in
-      let (a, uniq) = reconFromPatterns (UTmMatch (v, cases)) ctx uniq in
-      if ((getTimeOfType tv |> snd) > 0) then
-        TermWithMessage ("the term '%s' is not pure and cannot be matched.", v') |> TyperFailed |> raise
-      let (bs', tbs, uniq, css) = 
+    | TmFunction (funtype, cases) ->
+      let (argTy, uniq) = reconFromPatterns term.info cases ctx uniq
+      let (retTy, uniq) = genUniq uniq |> Tuple.map2 NTTyVar id
+      let (ty, uniq) = genUniq uniq |> Tuple.map2 NTTyVar id
+      let stack =
+        match funtype with
+          | FunNormal -> stack
+          | _         -> ty :: stack
+      let (bs', tbs, uniq, css) =
         let f = 
           cases 
             |> List.map (fun (pat, body) ->
-                if (isValidAsPattern pat |> not) then
-                  TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
-                else
-                  match (ctx |> bindPattern pat a) with
-                    | Some stack' -> 
-                      (List.append stack' stack, body)
-                    | None -> NotMatchable (pat, a, body) |> TyperFailed |> raise
+                match (ctx |> bindPattern pat argTy) with
+                  | Some stack' -> 
+                    (List.append stack' stack, body)
+                  | None ->
+                    NotMatchable argTy |> failat term.info
               )
             |> List.foldBack (fun (st, b) (bs', tbs, u, css) ->
                 let (b', tb, u', cs) = recon ctx st u b in
                 (b' :: bs', tb :: tbs, u', List.append cs css)
               )
         in f ([], [], uniq, [])
-      in
-      let term' = UTmMatch (v', cases |> List.map2 (fun nb (pat, b) -> (pat, nb)) bs') in
-      let (b, uniq) = genUniq uniq in
-      let b = TyVar b in
+      let cases' = cases |> List.map2 (fun nb (pat, _) -> (pat, nb)) bs'
       let bcstr =
-        tbs |> List.map2 (fun x t -> Constraint (b, t, x)) bs'
-      in
-      let cstrs = cstr @ css @ bcstr @ Constraint (tv, a, v') :: [] in
-      (term', b, uniq, cstrs)
-    
-    | UTmFixMatch cases ->
-      let (uvs, uniq) = genUniqs uniq 3 in
-      let (targ, targ', tret) =
-        match uvs with
-          | [a; b; c] -> (TyVar a, TyVar b, TyVar c)
-          | _ -> failwith "impossible_UFixMatch"
-      in
-      let tthis = TyFun (targ, tret) in
+        tbs |> List.map2 (fun x t -> Constraint (retTy, t, NotTemporalTerm x)) bs'
+      let newfun = TmFunction (funtype, cases') |> addTy ty
+      let cstrs = css @ bcstr @ [Constraint (ty, TyFun (argTy, retTy), NotTemporalTerm newfun)]
+      match funtype with
+        | FunNormal -> ()
+        | FunFixpoint -> verifyTermination term.info cases' |> ignore
+      (newfun, ty, uniq, cstrs)
 
-      let ctx' = ctx |> Context.addTerm "x" targ' in
-      let (mth, tmth, uniq, cstr1) = recon ctx' (tthis :: stack) uniq (UTmMatch (UTmFreeVar ["x"], cases)) in
+and verifyTermination source cases =
+  let fvc p b = List.init (countFvOfPattern p) (fun _ -> b)
 
-      let (ret, uniq) = genUniq uniq in
-      match mth with
-        | UTmMatch (_, cases) ->
-          verifyTermination cases |> ignore;
-          (UTmFixMatch cases, TyVar ret, uniq, cstr1 @ Constraint (tthis, TyFun (targ', tmth), UTmFixMatch cases) :: Constraint (TyVar ret, TyFun (targ', tmth), UTmFixMatch cases) :: [])
-        | _ ->
-          failwith "impossible_UFixMatch"
-
-and verifyTermination cases =
-  let fvc p b = List.init (countFvOfPattern p) (fun _ -> b) in
-  let rec verify dom codom t =
+  let rec verifyTemporal dom codom = function
+    | TmRun (_, Item tm) -> verify dom codom tm
+    | TmLetRun (_, _, Item tmv, Item tmb) -> verify dom codom tmv && verify dom codom tmb
+  and verify dom codom t =
     let self = dom |> List.length in
     let res = 
       match t with
-        | UTmApply (UTmBoundVar f, UTmBoundVar x :: _) when (f = self) ->
+        | TmApply (Item (TmBoundVar f), (Item (TmBoundVar x)) :: _) when (f = self) ->
           codom |> List.tryItem x ?| false
-        | UTmApply (UTmBoundVar f, _) when (f = self) -> false
-        | UTmMatch (UTmBoundVar x, cs) when (dom |> List.tryItem x ?| false) ->
-          cs |> List.forall (fun (pat, bdy) -> bdy |> verify (dom |> List.append (fvc pat true)) (codom |> List.append (fvc pat true)))
-        | UTmMatch (x, cs) ->
-          verify dom codom x && cs |> List.forall (fun (pat, bdy) -> bdy |> verify (dom |> List.append (fvc pat false)) (codom |> List.append (fvc pat false)))
-        | UTmConstruct (_, xs) -> xs |> List.forall (verify dom codom)
-        | UTmFun b ->
-          b |> verify (false :: dom) (false :: codom)
-        | UTmLet (x, l, r) 
-        | UTmLetDefer (x, l, r) ->
+        | TmApply (Item (TmBoundVar f), _) when (f = self) -> false
+        | TmApply (Item (TmFunction (_, cs)), Item (TmBoundVar x) :: _)
+          when (dom |> List.tryItem x ?| false) ->
+          cs |> List.forall (fun (pat, Item bdy) ->
+            bdy |> verify (dom |> List.append (fvc pat true))
+                          (codom |> List.append (fvc pat true)))
+        | TmTuple xs
+        | TmConstruct (_, xs) ->
+          xs |> List.map With.itemof |> List.forall (verify dom codom)
+        | TmLet (_, Item l, Item r) ->
           [l; r] |> List.forall (verify dom codom)
-        | UTmApply (l, rs) -> l :: rs |> List.forall (verify dom codom)
-        | UTmBoundVar x -> self <> x
-        | UTmTuple xs -> xs |> List.forall (verify dom codom)
-        | UTmFreeVar _
-        | UTmLiteral _
-        | UTmExternal _ -> true
-        | UTmDefer x
-        | UTmRun x ->
-          verify dom codom x
-        | UTmFixMatch cs ->
-          cs |> List.forall (fun (pat, bdy) -> bdy |> verify ((false :: dom) |> List.append (fvc pat false)) ((false :: codom) |> List.append (fvc pat false)))
-    in
+        | TmApply (Item l, rs) ->
+          l :: (rs |> List.map With.itemof) |> List.forall (verify dom codom)
+        | TmBoundVar x -> self <> x
+        | TmFreeVar _
+        | TmLiteral _
+        | TmBuiltin _
+        | TmRunnableBuiltin _ -> true
+        | TmDefer (_, Item x) ->
+          verifyTemporal dom codom x
+        | TmFunction(FunNormal, cs) ->
+          cs |> List.forall (fun (pat, bdy) ->
+            bdy.item |> verify (dom |> List.append (fvc pat false))
+                               (dom |> List.append (fvc pat false)))
+        | TmFunction(FunFixpoint, cs) ->
+          cs |> List.forall (fun (pat, bdy) ->
+            bdy.item |> verify ((false :: dom) |> List.append (fvc pat false))
+                               ((false :: codom) |> List.append (fvc pat false)))
     if res then
       res
     else
-      TermWithMessage ("Recursion is not well-founded. Bad expression: '%s'", t) |> TyperFailed |> raise
-  in cases |> List.forall (fun (ptn, bdy) ->
+      TermWithMessage ("Recursion is not well-founded. Bad expression: '%s'", t) |> failat source
+  in
+  cases |> List.forall (fun (ptn, bdy) ->
       match ptn with
-        | UTmConstruct _ -> verify (fvc ptn true) (fvc ptn true) bdy
-        | _ -> verify (fvc ptn true) [] bdy
+        | MtConstruct _ -> verify (fvc ptn true) (fvc ptn true) bdy.item
+        | _ -> verify (fvc ptn true) [] bdy.item
     )
 
-and reconFromPatterns mth ctx uniq =
-  let pats =
-    match mth with
-      | (UTmMatch (_, x)) -> x
-      | _ -> failwith "impossible_reconFromPatterns"
-  in
-  let (a, uniq) = genUniq uniq in
-  let rec gh uq pat =
+and reconFromPatterns source pats ctx uniq =
+  let (a, uniq) = genUniq uniq
+  let rec gh uniq pat =
     match pat with
-      | UTmConstruct (x, ys) ->
-        let (name, targs, cts, ctargs, nq, info, p) =
-          match (ctx |> Context.findConstructor x (Some ys)) with
-            | Some (TyDataType (name, targs, cts, p, info), ctargs) ->
-              let tprms = targs |> List.choose (function | TyVar x -> Some x | _ -> None) in
-              let ((targs', cts', ctargs'), uniq) = 
-                (targs, cts, ctargs) |> rename uq tprms (fun f (x, y, z) -> 
-                    (
-                      x |> List.map f,
-                      y |> List.map (argsmap f),
-                      z |> List.map f
-                    )
-                  )
-              in
-              (name, targs', cts', ctargs', uniq, info, p)
-            | _
-            | None -> UnknownVar (x, ctx) |> TyperFailed |> raise
-        in
-        let (fnq, pts) = ys |> List.fold (fun (u, ts) y -> let (nu, nt) = gh u y in (nu, nt :: ts)) (nq, []) in
+      | MtTuple xs ->
+        let (nq, ts) =
+          xs |> List.fold (fun (u, ts) x ->
+            let (nu, nt) = gh u x in (nu, nt :: ts)) (uniq, [])
+        (nq, TyTuple (ts |> List.rev))
+      | MtConstruct (x, ys) ->
+        let (name, targs, ctargs, prop, nq) =
+          match findDataType ctx uniq x (Some ys) with
+            | Some (TyDataType (name, targs, { cstrs = cts } & prop), uniq, ctargs) ->
+              (name, targs, ctargs, { prop with cstrs = cts }, uniq)
+            | _ -> UnknownVar x |> failat source
+        let (fnq, pts) =
+          ys |> List.fold (fun (u, ts) y ->
+            let (nu, nt) = gh u y in (nu, nt :: ts)) (nq, [])
         let asgn = 
           ctargs |> List.rev
-                 |> List.map2 (fun y -> (function | TyVar x -> Some (x, y) | _ -> None)) pts 
+                 |> List.map2 (fun y -> (function | NTTyVar x -> Some (x, y) | _ -> None)) pts 
                  |> List.choose id |> Map.ofList |> Assign 
-        in
-        let vt = TyDataType (name, targs, cts, p, info) |> substAll asgn in
+        let vt = TyDataType (name, targs, prop) |> NotTemporal |> substAll asgn
         (fnq, vt)
-      | UTmTuple xs ->
-        let (nq, ts) = xs |> List.fold (fun (u, ts) x -> let (nu, nt) = gh u x in (nu, nt :: ts)) (uq, []) in
-        (nq, TyTuple (ts |> List.rev))
-      | UTmLiteral LUnit -> (uq, TyUnit)
-      | UTmLiteral (LNat _) -> (uq, TyNat)
-      | UTmLiteral (LBool _) -> (uq, TyBool)
-      | UTmFreeVar ["_"]
-      | UTmBoundVar _ ->
-        let (tn, nq) = genUniq uq in
-        (nq, TyVar tn)
-      | _ -> TermWithMessage ("the term '%s' cannot be used as a pattern.", pat) |> TyperFailed |> raise
-  in
-  let (uniq, ts) = pats |> List.map fst |> List.fold (fun (u, ts) p -> let (nu, t) = gh u p in (nu, t :: ts)) (uniq, []) in
+      | MtLiteral LUnit -> (uniq, TyUnit)
+      | MtLiteral (LNat _) -> (uniq, TyNat)
+      | MtLiteral (LBool _) -> (uniq, TyBool)
+      | MtWildcard
+      | MtBoundVar _ ->
+        let (tn, nq) = genUniq uniq
+        (nq, NTTyVar tn)
+  let (uniq, args) =
+    pats |> List.map fst
+         |> List.fold (fun (u, ts) p ->
+            let (nu, t) = gh u p in (nu, (t, p) :: ts)) (uniq, [])
   let cstr =
-    ts |> List.map (fun t -> Constraint (TyVar a, t, mth))
-  in 
-  let rt = TyVar a |> substAll (unify cstr |> cstr_toAsgn) in
-  exhaustiveCheck (pats |> List.map fst) rt ctx;
+    args |> List.map (fun (t, p) -> Constraint (NTTyVar a, t, p.asTerm() |> NotTemporalTerm))
+  let rt = NTTyVar a |> substAll (unify cstr |> cstrToAsgn)
+  exhaustiveCheck source (pats |> List.map fst) rt ctx;
   (rt, uniq)
-
-
-and isValidAsPattern = function
-  | UTmLiteral _
-  | UTmConstruct (_, [])
-  | UTmFreeVar _ 
-  | UTmBoundVar _ -> true
-  | UTmConstruct (_, xs)
-  | UTmTuple xs -> xs |> List.forall isValidAsPattern
-  | _ -> false
 
 and bindPattern pat t ctx =
   let rec bt pat t =
     match (pat, t) with
-      | (UTmConstruct (n, xs), TyDataTypeSelf (name, ts)) ->
-        match (ctx |> Context.findType name) with
-          | Some (TyDataType (name, vts, cts, p, info)) ->
-            let asgn = vts |> List.map2 (fun x -> function | TyVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
+      | MtTuple xs, TyTuple ts when (List.length xs = List.length ts) ->
+        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat 
+      | MtConstruct (n, xs), NotTemporal (TyDataTypeSelf (name, ts)) ->
+        match ctx |> Context.findType name |> Option.map deschemePrettified with
+          | Some (NotTemporal (TyDataType (name, vts, { cstrs = cts } & prop))) ->
+            let asgn =
+              List.map2 (fun x -> 
+                function NTTyVar y -> (y, x) |> Some | _ -> None
+              ) ts vts
+              |> List.choose id |> Map.ofList |> Assign
             let cts' = cts |> List.map (argsmap (substAll asgn)) in
-            bt (UTmConstruct (n, xs)) (TyDataType (name, ts, cts', p, info))
-          | _ -> failwith "impossible_bindPattern"
-      | (UTmConstruct (n, xs), TyDataType (_, _, cts, _, _)) when (cts |> List.exists (fun c -> c.name = List.last n && List.length xs = List.length (c.args))) ->
+            bt (MtConstruct (n, xs)) (TyDataType (name, ts, { prop with cstrs = cts' }) |> NotTemporal)
+          | _ ->
+            failwith "impossible_bindPattern"
+      | MtConstruct (n, xs), NotTemporal (TyDataType (_, _, { cstrs = cts }))
+        when (cts |> List.exists (fun c -> c.name = List.last n && List.length xs = List.length (c.args))) ->
         let ts = (cts |> List.find (fun c -> c.name = List.last n)).args in
         xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UTmTuple xs, TyDataType(["*"], ts, _, _, _)) when (List.length xs = List.length ts) ->
-        xs |> List.map2 (fun x y -> bt y x) ts |> List.concat
-      | (UTmFreeVar ["_"], _)
-      | (UTmLiteral LUnit, TyUnit)
-      | (UTmLiteral (LNat _), TyDataType (["Nat"], _, _, _, _))
-      | (UTmLiteral (LBool _), TyBool) -> []
-      | (UTmBoundVar x, t) -> [ (x, t) ]
-      | _ -> failwith "bindfailed"
-  in
+      | MtWildcard, _
+      | MtLiteral LUnit, TyUnit
+      | MtLiteral (LNat _), TyNat
+      | MtLiteral (LBool _), TyBool -> []
+      | MtBoundVar x, t -> [ (x, t) ]
+      | _ ->
+        failwith "bindfailed"
   try
     bt pat t |> List.map snd |> Some
   with
     | _ -> None
-
 
 and getInductionDepth ptns ctx =
   let (<+>) (x, i) ys =
     match (ys |> Map.tryFind x) with
       | Some i' -> ys |> Map.add x (i + i')
       | None -> ys |> Map.add x i
-  in
   let concat ms =
     ms |> List.fold (fun mp xs -> xs |> Map.toList |> List.fold (fun m x -> x <+> m) mp) Map.empty
-  in
   let rec gett = function
-    | UTmConstruct (x, ys) ->
-      match (ctx |> Context.findConstructor x (Some ys)) with
-        | Some (TyDataType (name, _, _, _, _), _) -> (name, 1) <+> (ys |> List.map gett |> concat)
-        | _ -> Map.empty
-    | UTmFreeVar ["_"]
-    | UTmBoundVar _ -> Map.empty
-    | UTmTuple xs ->
+    | MtTuple xs ->
       xs |> List.map gett |> concat
+    | MtConstruct (x, ys) ->
+      match findDataType ctx 0 x (Some ys) with
+        | Some (TyDataType (name, _, _), _, _) -> (name, 1) <+> (ys |> List.map gett |> concat)
+        | _ -> Map.empty
+    | MtWildcard
+    | MtBoundVar _ -> Map.empty
     | _ -> Map.empty
-  in ptns |> List.map gett |> concat
+  ptns |> List.map gett |> concat
 
-and exhaustiveCheck ptns t ctx =
-  let dmp = getInductionDepth ptns ctx in
+and exhaustiveCheck source ptns t ctx =
+  let dmp = getInductionDepth ptns ctx
   let rec cartProd lol =
     let f n = function
       | [] -> [[n]]
       | xss -> xss |> List.map (fun xs -> n :: xs)
-    in
     match lol with
       | [] -> []
       | h :: t -> h |> List.collect (fun n -> f n (cartProd t))
-  in
   let next name mp =
-    match (mp |> Map.tryFind name) with
+    match mp |> Map.tryFind name with
       | Some 0
       | Some 1 -> mp |> Map.remove name
       | Some i -> mp |> Map.add name (i - 1)
       | None -> mp
-  in
   let rec genReq mp = function
-    | TyDataType (["*"], ts, _, _, _) ->
-      ts |> List.map (genReq mp) |> cartProd |> List.map UTmTuple
-    | TyDataType (vname, _, cts, _, _) ->
-      let ns = namespaceof vname
-      cts |> List.map (fun c ->
-              c.args |> List.map (genReq (mp |> next vname))
-                     |> cartProd
-                     |> (function 
-                          | [] -> [ UTmConstruct (ns @ [c.name], []) ]
-                          | x -> x |> List.map (fun xs -> UTmConstruct (ns @ [c.name], xs))
-                        )
-             ) 
-          |> List.concat
-    | TyUnit -> [ UTmLiteral LUnit ]
-    | TyBool -> [ UTmLiteral (LBool true); UTmLiteral (LBool false)]
-    | TyDataTypeSelf (name, ts) ->
-      match (ctx |> Context.findType name) with
-        | Some (TyDataType (name, vts, cts, p, info)) ->
-          if (mp |> Map.containsKey name) then
-            let asgn = vts |> List.map2 (fun x -> function | TyVar y -> (y, x) |> Some | _ -> None) ts |> List.choose id |> Map.ofList |> Assign in
-            let cts' = cts |> List.map (argsmap (substAll asgn)) in
-            genReq mp (TyDataType (name, vts, cts', p, info))
-          else
-            [ UTmFreeVar ["_"] ]
-        | _ -> 
-          printfn "%A" name;
-          printfn "%A" ctx;
-          failwith "impossible_exhaustivenessCheck"
-    | _ -> [ UTmFreeVar ["_"] ] // only matched with variable patterns
-  in
-  let possiblePatterns = genReq dmp t in
+    | TyTuple ts ->
+      ts |> List.map (genReq mp) |> cartProd |> List.map (TmTuple >> With.noinfo)
+    | TyUnit -> [ TmLiteral LUnit |> With.noinfo ]
+    | TyBool -> [ TmLiteral (LBool true); TmLiteral (LBool false)] |> List.map With.noinfo
+    | NotTemporal t ->
+      match t with
+        | TyDataType (vname, _, { cstrs = cts }) ->
+          let ns = namespaceof vname
+          List.collect (fun c ->
+            c.args |> List.map (genReq (mp |> next vname))
+                   |> cartProd
+                   |> (function 
+                        | [] -> [ TmConstruct (ns @ [c.name], []) ]
+                        | x -> x |> List.map (fun xs -> TmConstruct (ns @ [c.name], xs))
+                      )) cts
+          |> List.map With.noinfo
+        | TyDataTypeSelf (name, ts) ->
+          match ctx |> Context.findType name|> Option.map deschemePrettified with
+            | Some (NotTemporal (TyDataType (name, vts, { cstrs = cts } & prop))) ->
+              if (mp |> Map.containsKey name) then
+                let asgn =
+                  vts |> List.map2 (fun x ->
+                           function | NTTyVar y -> (y, x) |> Some | _ -> None
+                         ) ts 
+                      |> List.choose id |> Map.ofList |> Assign in
+                let cts' = cts |> List.map (argsmap (substAll asgn)) in
+                genReq mp (TyDataType (name, vts, { prop with cstrs = cts' }) |> NotTemporal)
+              else
+                [ TmFreeVar ["_"] |> With.noinfo ]
+            | _ -> 
+              printfn "%A" name;
+              failwith "impossible_exhaustivenessCheck"
+        | _ -> [ TmFreeVar ["_"] |> With.noinfo ] // only matched with variable patterns
+      | _ -> [ TmFreeVar ["_"] |> With.noinfo ] // only matched with variable patterns
+  let possiblePatterns = genReq dmp t
   let unmatched =
     ptns |> List.fold (fun xs ptn ->
         let xs' = xs |> List.filter (matchPattern ptn >> Option.isNone) in
         xs'
       ) possiblePatterns
-  in
-  if (List.length unmatched > 0) then
-    TermWithMessage ("The pattern match is not exhaustive.\nFor example, the value '%s' will fail.", unmatched |> List.head) |> TyperFailed |> raise
+  if not (List.isEmpty unmatched) then
+    TermWithMessage ("The pattern match is not exhaustive.\nFor example, the value '%s' will fail.", unmatched |> List.head) |> failat source
   else
     ()
-  
-let solve t cstr =
-  let cstr' = unify cstr in
-  t |> substAll (cstr_toAsgn cstr')
 
-let inferWithContext ctx term =
-  let (term', t, _, cstr) = recon ctx [] 0 term in
-  (term', solve t cstr |> prettify1)
+let inline private inferWithContextBase (ctx: TypeContext) term reconImpl =
+  let (term', _, _, cstr) = reconImpl ctx [] 0 term
+  let cstr' = unify cstr |> cstrToAsgn
+  let tterm = term' |> Term.mapInfo (fun i -> { i with ty = i.ty |> substAll cstr' })
+  tterm
 
-let inferWithAnnotation ctx term typ =
-  let (term', t, _, cstr) = recon ctx [] 0 term in
-  (term', solve t (Constraint (t, typ, term') :: cstr) |> prettify1)
+let inline inferWithContext ctx term         : TypedTerm =
+  inferWithContextBase ctx term recon
+let inline inferWithContextTemporal ctx term : TypedTemporalTerm =
+  inferWithContextBase ctx term reconTemporal
 
-let infer term =
-  inferWithContext [] term
+let inline infer term =         inferWithContext [] term
+let inline interTemporal term = inferWithContextTemporal [] term
 
-let printTypeError = function
-  | UnifyFailed (a, b, ut) ->
-    printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n------------> %s" (to_s a) (to_s b) (to_s ut)
-  | UnifyFailedWithMessage (msg, a, b, ut) ->
-    printfn "TYPER FAILED: '%s' and '%s' are incompatible types.\n%s\n------------> %s" (to_s a) (to_s b) msg (to_s ut)
-  | UnknownVar (n, ctx) ->
-    printfn "TYPER FAILED: '%s' is not defined (unknown variable)" (sprint_qualified n)
-  | UnknownConst (n, ts, ctx) ->
-    let ac = ts |> List.length in
-    printfn "TYPER FAILED: a constructor '%s' that has %i arguments does not exist." (sprint_qualified n) ac
-  | NotMatchable (l, t, r) ->
-    printfn "TYPER FAILED: invalid match pattern for type '%s':\n------------> %s -> %s" (to_s t) (to_s l) (to_s r)
-  | NotRunnable t ->
-    printfn "TYPER FAILED: '%s' is not runnable" (to_s t)
-  | TermWithMessage (f, t) ->
-    sprintf f (to_s t) |> printfn "TYPER FAILED: %s"
-  | NotInductive t ->
-    printfn "TYPER FAILED: '%s' is not inductive" (to_s t)
-
-()
+let inline printTypeError e = to_s e |> printfn "%s"

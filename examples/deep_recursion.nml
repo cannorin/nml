@@ -1,13 +1,11 @@
-let nested_fixp = 
+def nested_fixp =
   fixpoint f of
-    Succ n ->
+    S n ->
       let inner =
         fixpoint g of
-          Succ m -> (g m) + (f n) + 1 
+          S m -> (g m) + (f n) + 1 
         | 0 -> n
-      in inner (n + 1)
+      in inner (S n)
   | 0 -> 0
-in
-
+;;
 nested_fixp 12 |> print
-

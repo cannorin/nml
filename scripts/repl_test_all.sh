@@ -1,5 +1,7 @@
 #!/bin/sh
 
+make debug
+
 for f in examples/*.nml; do 
   echo "---------- $f ----------"
   dotnet bin/Debug/netcoreapp2.0/nmli.dll $f

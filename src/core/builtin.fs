@@ -5,161 +5,100 @@ open nml.Parser
 open nml.Typer
 open nml.Helper
 open nml.Contexts
-open Microsoft.FSharp.Collections
 open System
+open FSharp.Collections
 
-let DefType name t =
-  TypeContext (name, t)
+let builtinTypes : TermContext =
+  [
+    "Nat", TyNat
+    "Bool", TyBool
+    "Unit", TyUnit
+    "List", TyList (NTTyVar "a")
+    "Option", TyOption (NTTyVar "a")
+  ] |> List.map (Tuple.map2 id generalizeAllFV >> TypeContext)
 
-let DefTypeOp name printer =
-  TypeContext (name, TypeOp ([name], [], printer))
+let builtin name ty f =
+  let inline f xs =
+    try f (xs |> List.map With.itemof) |> With.noinfo |> Some
+    with MatchFailureException _ -> None
+  let ty = NmlParser.parseType ty 
+           |> ParserUtils.toKnownType builtinTypes
+  let tm = TmBuiltin (name, generalizeAllFV ty, BuiltinFunc f |> EValue)
+           |> With.info { ty=ty; source=Builtin }
+  TermContext (name, tm)
 
-let DefVariant name ts =
-  TypeContext (name, Variant ([name], [], ts))
+let runnableBuiltin name ty f =
+  let inline f (ti, xs) =
+    try f (ti, (xs |> List.map With.itemof)) |> With.noinfo |> Some
+    with MatchFailureException _ -> None
+  let ty = NmlParser.parseType ty 
+           |> ParserUtils.toKnownType builtinTypes
+  let tm = TmRunnableBuiltin (name, generalizeAllFV ty, RunnableBuiltinFunc f |> EValue)
+           |> With.info { ty=ty; source=Builtin }
+  TermContext (name, tm)
 
-let DefInductiveVariant name f =
-  TypeContext (name, InductiveVariant ([name], [], f))
-
-let DefPolyVariant name targs ts =
-  TypeContext (name, Variant ([name], targs |> List.map TyVar, ts))
-
-let DefPolyInductiveVariant name targs f =
-  TypeContext (name, InductiveVariant ([name], targs |> List.map TyVar, f))
-
-let builtinTypes = [
-  DefInductiveVariant "Nat" (fun self -> [ NewRecConst ("Succ", [self]); NewConst ("0", []) ]);
-]
-
-let impossible = UTmLiteral LUnit
-
-let DefFun name targs tret f =
-  let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (foldFun TyFun targs tret) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = foldFun TyFun targs tret in
-  TermContext (name, (t, ExternalFun name t e))
-
-let DefPolyFun name tas targs tret f =
-  let (_, timeret) = getTimeOfType tret
-  let e xs = UTmApply (ExternalFun name (TyScheme (set tas, foldFun TyFun targs tret)) f, xs) |> times timeret UTmRun |> times timeret UTmDefer in
-  let t = TyScheme (set tas, foldFun TyFun targs tret) in
-  TermContext (name, (t, ExternalFun name t e))
-
-let DefRawTerm name term =
-  try
-    let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) term in
-    let fv = fvOf tt in
-    if (Set.count fv > 0) then
-      TermContext (name, (TyScheme (fv, tt), t'))
-    else
-      TermContext (name, (tt, t'))
-  with
-    | TyperFailed tf -> printTypeError tf; failwith ""
-    | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
-
-let DefRawCode name s =
-  try
-    let t = NmlParser.parseTerm s |> ParserUtils.toUntypedTerm builtinTypes in
-    let (t', tt) = inferWithContext (builtinTypes |> Context.termMap fst) t in
-    let fv = fvOf tt in
-    if (Set.count fv > 0) then
-      TermContext (name, (TyScheme (fv, tt), t'))
-    else
-      TermContext (name, (tt, t'))
-  with
-    | ParserFailed msg -> sprintf "PARSER FAILED: %s" msg |> failwith
-    | TyperFailed tf -> printTypeError tf; failwith ""
-    | e -> printfn "RUNTIME ERROR: %s" e.InnerException.Message; failwith "";
-
-let addTerm name term ctx =
-  let (t', tt) = inferWithContext (ctx |> Context.termMap fst) term in
-  let fv = fvOf tt in
-  if (Set.count fv > 0) then
-    TermContext (name, (TyScheme (fv, tt), t')) :: ctx
-  else
-    TermContext (name, (tt, t')) :: ctx
-
-let builtinTerms = [
-  DefRawTerm "run_" (UTmFun (UTmRun (UTmBoundVar 0)));
-  DefFun "exit" [TyNat] (TyDeferred TyUnit) (function
-    | UTmLiteral (LNat x) :: _ -> Environment.Exit(int32 x); UTmLiteral LUnit
-    | _ -> impossible
-  );
-  DefFun "+" [TyNat; TyNat] TyNat (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a + b) |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "*" [TyNat; TyNat] TyNat (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a * b) |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "%" [TyNat; TyNat] TyNat (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> LNat (a % b) |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "-?" [TyNat; TyNat] (TyOption TyNat) (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ ->
-      if (a > b) then
-        UTmConstruct (["Some"], [LNat (a - b) |> UTmLiteral])
+#nowarn "0025" // suppress incomplete pattern warning; match failures shall be catched by caller
+let builtinTerms : TermContext = [
+  builtin "+" "Nat -> Nat -> Nat" <| function 
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] -> TmLiteral (LNat (n+m))
+  builtin "*" "Nat -> Nat -> Nat" <| function
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] -> TmLiteral (LNat (n*m))
+  builtin "%" "Nat -> Nat -> Nat" <| function
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] -> TmLiteral (LNat (n%m))
+  builtin "-?" "Nat -> Nat -> Option Nat" <| function 
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] ->
+      if n >= m then
+        TmConstruct(["Some"], [TmLiteral (LNat (n-m)) |> With.noinfo])
       else
-        UTmConstruct (["None"], [])
-    | _ -> impossible
-  );
-  DefPolyFun "=" ["a"] [TyVar "a"; TyVar "a"] TyBool (function
-    | a :: b :: _ -> (a = b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefPolyFun "<>" ["a"] [TyVar "a"; TyVar "a"] TyBool (function
-    | a :: b :: _ -> (a <> b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "not" [TyBool] TyBool (function
-    | UTmLiteral (LBool b) :: _ -> not b |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun ">" [TyNat; TyNat] TyBool (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a > b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "<" [TyNat; TyNat] TyBool (function
-    | UTmLiteral (LNat a) :: UTmLiteral (LNat b) :: _ -> (a < b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "&&" [TyBool; TyBool] TyBool (function
-    | UTmLiteral (LBool a) :: UTmLiteral (LBool b) :: _ -> (a && b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "||" [TyBool; TyBool] TyBool (function
-    | UTmLiteral (LBool a) :: UTmLiteral (LBool b) :: _ -> (a || b) |> LBool |> UTmLiteral
-    | _ -> impossible
-  );
-  DefFun "readNat" [TyUnit] (TyDeferred TyNat) (fun _ ->
-      printf "readNat> ";
-      Console.ReadLine()
-        |> uint32
-        |> LNat |> UTmLiteral
-  );
-  DefPolyFun "print" ["a"] [TyVar "a"] (TyDeferred TyUnit) (function
-    | x :: _ ->
-      printfn "print> %s" (to_s x); UTmLiteral LUnit
-    | _ -> printfn "print> ???"; impossible
-  );
-  DefFun "pause" [TyUnit] (TyDeferred TyUnit) (function
-    | _ ->
-      printf "pause> press enter to continue ..";
-      Console.ReadLine () |> ignore;
-      UTmLiteral LUnit
-  );
+        TmConstruct(["None"], [])
+  builtin "=" "a -> a -> Bool" <| function
+    | [a; b] when Term.isStructural a && Term.isStructural b ->
+      TmLiteral (LBool (a = b))
+  builtin "<>" "a -> a -> Bool" <| function
+    | [a; b] when Term.isStructural a && Term.isStructural b ->
+      TmLiteral (LBool (a = b))
+  builtin ">" "Nat -> Nat -> Bool" <| function
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] -> TmLiteral (LBool (n > m))
+  builtin "<" "Nat -> Nat -> Bool" <| function
+    | [TmLiteral (LNat n); TmLiteral (LNat m)] -> TmLiteral (LBool (n < m))
+  builtin "&&" "Bool -> Bool -> Bool" <| function
+    | [TmLiteral (LBool n); TmLiteral (LBool m)] -> TmLiteral (LBool (n && m))
+  builtin "||" "Bool -> Bool -> Bool" <| function
+    | [TmLiteral (LBool n); TmLiteral (LBool m)] -> TmLiteral (LBool (n || m))
+  builtin "not" "Bool -> Bool -> Bool" <| function
+    | [TmLiteral (LBool b)] -> TmLiteral (LBool (not b))
+  
+  runnableBuiltin "readNat" "Unit -> Next Nat" <| function
+    | ti, [TmLiteral LUnit] when ti <> TimeN Z ->
+      printf "readNat> "
+      Console.ReadLine() |> uint32 |> LNat |> TmLiteral
+  runnableBuiltin "print" "a -> Next Unit" <| function
+    | ti, [x] when ti <> TimeN Z ->
+      printfn "print: %s" (to_s x)
+      TmLiteral LUnit
+  runnableBuiltin "pause" "Unit -> Next Unit" <| function
+    | ti, [TmLiteral LUnit] when ti <> TimeN Z ->
+      printf "pause: press Enter to continue..."
+      Console.ReadLine() |> ignore
+      TmLiteral LUnit
+  runnableBuiltin "exit" "Nat -> Next Unit" <| function
+    | ti, [TmLiteral (LNat code)] when ti <> TimeN Z ->
+      Environment.Exit (int code)
+      TmLiteral LUnit
 ]
 
 open System.IO
 
-let defaultContext =
+let defaultContext : TermContext =
   let ctx = List.append builtinTypes builtinTerms
   let stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib.nml")
   let (_, stdlib) = 
     File.ReadAllText stdlibPath
       |> NmlParser.parseToplevelWithFileName stdlibPath
-      |> ParserUtils.toToplevelBase ctx NmlParser.parseToplevelWithFileName ctx []
+      |> ParserUtils.toToplevelBase
+           ctx
+           NmlParser.parseToplevelWithFileName
+           (fun ctx -> Typer.inferWithContext (ctx |> Context.termMap (Term.getType >> generalizeAllFV)))
+           ctx
+           []
   stdlib @ ctx
-
-()

@@ -1,39 +1,39 @@
 let add l =
   fixpoint f of
-    Succ n -> Succ (f n)
+    S n -> S (f n)
   | 0 -> l
 in
 
 let mul a =
   fixpoint f of
-    Succ n -> add (f n) a
+    S n -> add (f n) a
   | 0 -> 0
 in
 
 let sub =
   fixpoint f of
-  | Succ n -> 
+  | S n -> 
     begin function
-      Succ m -> f n m
-    | 0 -> Some (Succ n)
+      S m -> f n m
+    | 0 -> Some (S n)
     end
   | 0 ->
     begin function
-      Succ _ -> None
+      S _ -> None
     | 0 -> Some 0
     end
 in
 
 let gt orEqual =
   fixpoint f of
-  | Succ n -> 
+  | S n -> 
     begin function
-      Succ m -> f n m
+      S m -> f n m
     | 0 -> true
     end
   | 0 ->
     begin function
-      Succ _ -> false
+      S _ -> false
     | 0 -> orEqual
     end
 in
@@ -42,12 +42,12 @@ let mod n d =
   let f =
     fixpoint f of
       0 -> id
-    | Succ j ->
+    | S j ->
       begin fun r ->
-        if Succ r = d then
+        if S r = d then
           f j 0
         else
-          f j (Succ r)
+          f j (S r)
       end
   in f n 0
 in
