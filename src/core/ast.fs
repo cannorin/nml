@@ -441,6 +441,8 @@ and TemporalTerm<'Info> with
         | TmLetRun (time, s, x, y) -> TmLetRun (time, s, Term<_>.mapInfo(f, x), Term<_>.mapInfo(f, y))
 
 module Term =
+  let inline isVariable (Item x) =
+    match x with TmBoundVar _ | TmFreeVar _ -> true | _ -> false
   let inline isClosed (Item x: With< ^X, _>) = (^X: (member isClosed: int -> bool) x,0)
   let inline getType (Info { ty = ty }) = ty
   let rec isStructural = function 

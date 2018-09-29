@@ -165,14 +165,20 @@ and     e  (ctx: Context<EracedTerm>)
                     |> Option.map (fun bind -> (bind, bd))
                   )
                |> List.tryHead with
-        | Some (bind, body) when List.length cs = 1 || Term.isClosed arg ->
-          let s = List.length bind + match ft with FunNormal -> 0 | _ -> 1
-          let f = TmFunction (ft, cs) |> noinfo |> shift 0 s |> e ctx bindings stack
-          let stack' = 
-               (bind |> List.map (shift 0 s >> Some))
-             @ (match ft with FunNormal -> [] | _ -> [Some f])
-             @ (stack |> List.map (Option.map (shift 0 s)))
-          let mt = body |> replace ctx bindings stack' |> shift 0 -s
+        | Some (bind, body) when List.length cs = 1 || (Term.isVariable arg |> not) ->
+          let stack' =
+            let bind = bind |> List.map Some
+            match ft with
+              | FunNormal -> bind @ stack
+              | _ ->
+                let s = List.length bind + 1
+                let f = TmFunction (ft, cs)
+                        |> noinfo
+                        |> shift 0 s
+                        |> replace ctx bindings stack
+                        |> shift 0 -s
+                bind @ [Some f] @ stack
+          let mt = body |> replace ctx bindings stack'
           TmApply (mt, rest) |> noinfo |> e ctx bindings stack
         | _ ->
           TmApply (

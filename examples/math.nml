@@ -57,4 +57,4 @@ mul 7 6 |> print !;
 sub 7 5 |> print !;
 gt true 4 3 |> print !;
 gt false 2 2 |> print !;
-mod 5 3 |> print
+mod 100 7 |> print

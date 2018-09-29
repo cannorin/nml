@@ -1,4 +1,4 @@
-let nested_fixp = 
+def nested_fixp =
   fixpoint f of
     S n ->
       let inner =
@@ -7,7 +7,5 @@ let nested_fixp =
         | 0 -> n
       in inner (S n)
   | 0 -> 0
-in
-
-nested_fixp 5 |> print
-
+;;
+nested_fixp 12 |> print

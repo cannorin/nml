@@ -19,7 +19,7 @@ let inline scan prompt = editor.Edit(prompt, "")
 let tryRun (ctx: EvalContext) fn quiet input =
   try
     let tls, _ =
-      NmlParser.parseToplevelWithFileName fn input 
+      NmlParser.parseToplevelWithFileName fn input
       |> ParserUtils.toToplevelAndNewContextEval ctx ["repl"]
     let (ctx', tls') =
       let rec evalTop (ctx: EvalContext) newtls =
@@ -29,9 +29,7 @@ let tryRun (ctx: EvalContext) fn quiet input =
             let inline id2 _ t = t
             let newtl =
               match ct with
-                | TopTermDef (name, (ty, tm), info) ->
-                  let tm' = eval (ctx |> Context.termMap snd) tm
-                  TopTermDef (name, (ty, tm'), info)
+                | TopTermDef _ -> ct
                 | TopDo ((ty, tm), info) ->
                   if not quiet then
                     cprintfn ConsoleColor.DarkGray "type: %s" (to_s ty)
