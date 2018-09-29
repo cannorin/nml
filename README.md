@@ -112,7 +112,7 @@ This ensures the linearity of the whole execution, while
 Also, it should be doable to express parallel computation in this type system as
 
 ```
-parallel :: List (Eventually a) -> List a
+parallel :: List (Eventually a) -> Eventually (List a)
 ```
 
 , and I'm currently investigating it.
