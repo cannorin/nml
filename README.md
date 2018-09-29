@@ -107,7 +107,7 @@ Each computation in each stage is kept pure functional:
 This ensures the linearity of the whole execution, while
 
 * allowing non-strict evaluation inside stages (because they are pure): lazy evaluation and even partial evaluation
-* not relying on specific compiler magics (such as ```RealWorld`` in GHC)
+* not relying on specific compiler magics (such as ```RealWorld``` in GHC)
 
 Also, it should be doable to express parallel computation in this type system as
 
