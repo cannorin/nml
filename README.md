@@ -54,7 +54,7 @@ let-finally x = <@ 1 @> in x + 1
 is the equivalent of
 
 ```
-let x = <@ 1 @> in <@ (run[inf] x) + 1@>
+let x = <@ 1 @> in <@ (run[inf] x) + 1 @>
 ```
 
 and has type ```Finally Nat```.
