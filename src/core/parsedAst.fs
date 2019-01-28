@@ -241,10 +241,11 @@ module ParserUtils =
               | x' -> TmDefer (TimeN 1u, NotTemporalTerm x')
           | PTmDeferInf x -> TmDefer (TimeInf, tot stack x |> NotTemporalTerm)
           | PTmLet (x, r, b) ->
-            TmLet (x, r |> tot stack, b |> tot stack)
+            TmLet (x, r |> tot stack, b |> tot (stack |> List.filter ((<>) x)))
           | PTmLetDefer (time, x, r, b) ->
             TmDefer (time,
-              TmLetRun (x, time, r |> tot stack, b |> tot stack) |> sameInfoOf ptm
+              TmLetRun (x, time, r |> tot stack, b |> tot (stack |> List.filter ((<>) x)))
+              |> sameInfoOf ptm
             )
           | PTmOp2 (l, op, r) when ctx |> Context.findConstructor [op] (Some [l; r]) |> Option.isSome ->
             TmConstruct ([op], [l; r] |> List.map (tot stack))
