@@ -159,7 +159,6 @@ let unify cs =
           | TyDataTypeSelf (n, lts), TyDataTypeSelf (m, rts) when n = m ->
             rest |> List.append (List.map2 (fun x y -> (x, y, tm)) lts rts) |> u
           | s, t ->
-            printfn "%A, %A" s t
             UnifyFailed (None, prettify' s, prettify' t) |> failat tm.info.source
       | (s, t, u) :: _ ->
         UnifyFailed (None, prettify s, prettify t) |> failat u.info.source
@@ -190,19 +189,13 @@ let rec reconTemporal (ctx: Context<PolyType>)
       (term', ty', uniq, cstr)
     
     | TmLetRun (vname, ti, tmv, tmb) ->
+      let valueTy, uniq = genUniq uniq |> Tuple.map2 NTTyVar id
       let (tmv', tyv, uniq, cstrv) = recon ctx stack uniq tmv
-      let tyv' =
-        cstrv
-        |> unify
-        |> cstrToAsgn
-        |> substAll <| tyv
-        |> runTypeBy ti
-      let ctx' = ctx |> Context.addTerm vname (tyv' |> generalize ctx)
+      let ctx' = ctx |> Context.addTerm vname (MonoType valueTy)
       let (tmb', tyb, uniq, cstrb) = recon ctx' stack uniq tmb
-      let (nb, uniq) = genUniq uniq
-      let term' = TmLetRun (vname, ti, tmv', tmb') |> addTy (NTTyVar nb)
-      (term', NTTyVar nb, uniq, 
-       cstrb @ [Constraint (NTTyVar nb, tyb, term')])
+      let term' = TmLetRun (vname, ti, tmv', tmb') |> addTy tyb
+      term', tyb, uniq,
+      cstrv @ cstrb @ [Constraint (valueTy |> delayTypeBy ti, tyv, term')]
 
 and recon (ctx: Context<PolyType>)
           (stack: TemporalType list)
@@ -282,7 +275,7 @@ and recon (ctx: Context<PolyType>)
       let (value', tvalue, uniq, cstr1) = recon ctx stack uniq value
       let cstr1' = unify cstr1
       let tvalue' = tvalue |> substAll (cstrToAsgn cstr1')
-      let tx = generalize ctx tvalue'
+      let tx = MonoType tvalue'
       let ctx' = ctx |> Context.addTerm x tx
       let (body', tbody, uniq, cstr2) = recon ctx' stack uniq body
 
