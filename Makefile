@@ -4,6 +4,7 @@ REAL_PREFIX=$(shell realpath $(PREFIX))
 
 DOTNET?=$(DOTNET_PATH)/dotnet
 GIT?=$(shell which git)
+PUBLISH_ARGS=src/interpreter/nml.Interpreter.fsproj -c Release --self-contained 
 
 all: publish
 
@@ -14,13 +15,13 @@ run: release
 	$(DOTNET) run -c Release -p src/interpreter/nml.Interpreter.fsproj
 
 publish-windows:
-	$(DOTNET) publish -c Release --self-contained --runtime win-x64 -o ../../bin/publish/windows/
+	$(DOTNET) publish $(PUBLISH_ARGS) --runtime win-x64 -o bin/publish/windows/ 
 
 publish-linux:
-	$(DOTNET) publish -c Release --self-contained --runtime linux-x64 -o ../../bin/publish/linux/
+	$(DOTNET) publish $(PUBLISH_ARGS) --runtime linux-x64 -o bin/publish/linux/
 
 publish-osx:
-	$(DOTNET) publish -c Release --self-contained --runtime osx-x64 -o ../../bin/publish/osx/
+	$(DOTNET) publish $(PUBLISH_ARGS) --runtime osx-x64 -o bin/publish/osx/
 
 publish: publish-windows publish-linux publish-osx ;
 
