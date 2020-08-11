@@ -9,4 +9,4 @@ if [ ! -f "${script_dir}/.dotnet/dotnet" ]; then
 fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_PATH="${script_dir}/.dotnet"
-make run-debug
+make run
