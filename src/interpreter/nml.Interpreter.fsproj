@@ -8,8 +8,6 @@
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
     <OutputPath>..\..\bin\Release\</OutputPath>
-    <PublishSingleFile>true</PublishSingleFile>
-    <PublishTrimmed>true</PublishTrimmed>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
