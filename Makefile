@@ -4,7 +4,7 @@ REAL_PREFIX=$(shell realpath $(PREFIX))
 
 DOTNET?=$(DOTNET_PATH)/dotnet
 GIT?=$(shell which git)
-PUBLISH_ARGS=src/interpreter/nml.Interpreter.fsproj -c Release --self-contained 
+PUBLISH_ARGS=src/interpreter/nml.Interpreter.fsproj -c Release -p:PublishSingleFile=true -p:PublishTrimmed=true -p:PublishReadyToRun=true --self-contained 
 
 all: publish
 
