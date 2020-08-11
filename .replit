@@ -1,0 +1,2 @@
+run = "bash run-replit.sh"
+language = "fsharp-netcore" # optional
